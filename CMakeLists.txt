@@ -36,6 +36,11 @@ add_library(bridge_adapter_kepler_k2 STATIC
 )
 target_link_libraries(bridge_adapter_kepler_k2 PUBLIC bridge_project_options)
 
+add_library(bridge_adapter_pm01 STATIC
+  src/bridge/adapters/pm01/pm01_adapter.cpp
+)
+target_link_libraries(bridge_adapter_pm01 PUBLIC bridge_project_options)
+
 add_library(bridge_extensions STATIC
   src/bridge/extensions/legacy_kepler_hooks.cpp
 )
@@ -93,6 +98,12 @@ if(BUILD_TESTING)
     tests/adapters/kepler_k2_adapter_test.cpp
     bridge_project_options
     bridge_adapter_kepler_k2
+  )
+
+  bridge_add_test(pm01_adapter_test
+    tests/adapters/pm01_adapter_test.cpp
+    bridge_project_options
+    bridge_adapter_pm01
   )
 
   bridge_add_test(hooks_isolation_test
