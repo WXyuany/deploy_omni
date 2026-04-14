@@ -30,17 +30,23 @@ void TestLoadsSampleBridgeConfig() {
 
   const auto& config = *result.config;
   assert(config.source_path == "../config/kepler_k2.sample.yaml");
+  assert(config.robot_type == "kepler_k2");
   assert(config.runner.loop_period_ns == 4'000'000U);
   assert(config.runner.command_stale_timeout_ns == 120'000'000U);
-  assert(config.adapter.session.robot_id == "kepler_k2");
-  assert(config.adapter.session.transport_address == "udp:robot_lan0");
-  assert(config.adapter.session.control_profile == "torque_pd_passthrough");
-  assert(config.adapter.session.initialize_timeout_ns == 1'000'000'000U);
-  assert(config.adapter.session.read_timeout_ns == 4'000'000U);
-  assert(config.adapter.session.write_timeout_ns == 4'000'000U);
-  assert(config.adapter.safety.safe_command_supported);
-  assert(config.adapter.safety.require_initial_state_before_motion);
-  assert(config.adapter.safety.allow_command_when_imu_missing);
+  assert(config.dds.domain_id == 0U);
+  assert(config.dds.topics.command == "kepler_k2/low_level_command");
+  assert(config.dds.topics.state == "kepler_k2/low_level_state");
+  assert(config.dds.topics.status == "kepler_k2/bridge_status");
+  assert(config.adapter.kind == "kepler_k2");
+  assert(config.adapter.robot_name == "kepler_k2");
+  assert(config.adapter.robot_model == "k2");
+  assert(config.adapter.command_mode == "torque_pd_passthrough");
+  assert(config.adapter.connection.transport == "udp");
+  assert(config.adapter.connection.interface_hint == "robot_lan0");
+  assert(config.adapter.startup.read_initial_state_timeout_ns == 1'000'000'000U);
+  assert(config.adapter.startup.require_healthy_hardware);
+  assert(config.adapter.safety.safe_command_profile == "zero_torque");
+  assert(config.adapter.safety.allow_safe_command_during_shutdown);
   assert(config.adapter.joint_names.size() == 12U);
   assert(config.adapter.joint_names.front() == "l_hip_yaw");
   assert(config.adapter.joint_names.back() == "r_ankle_roll");
@@ -70,6 +76,15 @@ void TestRejectsUnsupportedFaultPolicyMode() {
         << "    send_safe_command_on_fault: true\n"
         << "    publish_degraded_state_while_faulted: true\n"
         << "    halt_command_writes_while_faulted: true\n"
+        << "dds:\n"
+        << "  domain_id: 0\n"
+        << "  topics:\n"
+        << "    command:\n"
+        << "      name: kepler_k2/low_level_command\n"
+        << "    state:\n"
+        << "      name: kepler_k2/low_level_state\n"
+        << "    status:\n"
+        << "      name: kepler_k2/bridge_status\n"
         << "adapter:\n"
         << "  kind: kepler_k2\n"
         << "  robot_model: k2\n"
@@ -136,6 +151,15 @@ void TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth() {
         << "    send_safe_command_on_fault: true\n"
         << "    publish_degraded_state_while_faulted: true\n"
         << "    halt_command_writes_while_faulted: true\n"
+        << "dds:\n"
+        << "  domain_id: 0\n"
+        << "  topics:\n"
+        << "    command:\n"
+        << "      name: kepler_k2/low_level_command\n"
+        << "    state:\n"
+        << "      name: kepler_k2/low_level_state\n"
+        << "    status:\n"
+        << "      name: kepler_k2/bridge_status\n"
         << "adapter:\n"
         << "  kind: kepler_k2\n"
         << "  robot_model: k2\n"
@@ -197,9 +221,162 @@ void TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth() {
   const auto result = load_bridge_config(path);
   assert(result.succeeded());
   assert(result.config.has_value());
+  assert(result.config->robot_type == "kepler_k2");
   assert(result.config->adapter.joint_names.size() == 1U);
   assert(result.config->adapter.joint_names[0] == "l_hip_yaw");
   assert(result.config->joint_map_entries.size() == 2U);
+}
+
+void TestLoadsUnknownRobotKindAsFactoryInput() {
+  const std::string path = "bridge_config_unknown_robot_test.yaml";
+  {
+    std::ofstream output(path);
+    output
+        << "schema_version: 1\n"
+        << "bridge:\n"
+        << "  robot_name: demo_robot\n"
+        << "  loop_rate_hz: 250\n"
+        << "  stale_command_timeout_ms: 120\n"
+        << "  startup_idle_policy:\n"
+        << "    mode: zero_torque\n"
+        << "    require_first_valid_command: true\n"
+        << "    use_adapter_safe_command: true\n"
+        << "  fault_policy:\n"
+        << "    mode: fail_stop\n"
+        << "    send_safe_command_on_fault: true\n"
+        << "    publish_degraded_state_while_faulted: true\n"
+        << "    halt_command_writes_while_faulted: true\n"
+        << "dds:\n"
+        << "  domain_id: 0\n"
+        << "  topics:\n"
+        << "    command:\n"
+        << "      name: kepler_k2/low_level_command\n"
+        << "    state:\n"
+        << "      name: kepler_k2/low_level_state\n"
+        << "    status:\n"
+        << "      name: kepler_k2/bridge_status\n"
+        << "adapter:\n"
+        << "  kind: demo_robot\n"
+        << "  robot_model: prototype\n"
+        << "  command_mode: torque_pd_passthrough\n"
+        << "  connection:\n"
+        << "    transport: udp\n"
+        << "    interface_hint: loopback0\n"
+        << "  startup:\n"
+        << "    read_initial_state_timeout_ms: 1000\n"
+        << "    require_healthy_hardware: true\n"
+        << "  safety:\n"
+        << "    safe_command_profile: zero_torque\n"
+        << "    allow_safe_command_during_shutdown: true\n"
+        << "joint_mapping:\n"
+        << "  validation:\n"
+        << "    expected_sim_joint_count: 1\n"
+        << "    expected_hardware_joint_count: 1\n"
+        << "    require_dense_enabled_sim_indexes: true\n"
+        << "    require_dense_enabled_hardware_indexes: true\n"
+        << "    require_unique_enabled_sim_names: true\n"
+        << "    require_unique_enabled_hardware_names: true\n"
+        << "  entries:\n"
+        << "    - sim_index: 0\n"
+        << "      hardware_index: 0\n"
+        << "      sim_name: joint0\n"
+        << "      hardware_name: motor0\n"
+        << "      label: joint 0\n"
+        << "      enabled: true\n"
+        << "      transforms:\n"
+        << "        position: {sign: 1.0, offset: 0.0}\n"
+        << "        velocity: {sign: 1.0, offset: 0.0}\n"
+        << "        effort: {sign: 1.0, offset: 0.0}\n"
+        << "        stiffness: {sign: 1.0, offset: 0.0}\n"
+        << "        damping: {sign: 1.0, offset: 0.0}\n"
+        << "        acceleration: {sign: 1.0, offset: 0.0}\n"
+        << "      sim_limits:\n"
+        << "        position: {lower: -1.0, upper: 1.0}\n"
+        << "      hardware_limits:\n"
+        << "        position: {lower: -1.0, upper: 1.0}\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->robot_type == "demo_robot");
+  assert(result.config->adapter.kind == "demo_robot");
+  assert(result.config->adapter.robot_model == "prototype");
+}
+
+void TestRejectsNegativeDdsDomainId() {
+  const std::string path = "bridge_config_negative_domain_test.yaml";
+  {
+    std::ofstream output(path);
+    output
+        << "schema_version: 1\n"
+        << "bridge:\n"
+        << "  robot_name: kepler_k2\n"
+        << "  loop_rate_hz: 250\n"
+        << "  stale_command_timeout_ms: 120\n"
+        << "  startup_idle_policy:\n"
+        << "    mode: zero_torque\n"
+        << "    require_first_valid_command: true\n"
+        << "    use_adapter_safe_command: true\n"
+        << "  fault_policy:\n"
+        << "    mode: fail_stop\n"
+        << "    send_safe_command_on_fault: true\n"
+        << "    publish_degraded_state_while_faulted: true\n"
+        << "    halt_command_writes_while_faulted: true\n"
+        << "dds:\n"
+        << "  domain_id: -1\n"
+        << "  topics:\n"
+        << "    command:\n"
+        << "      name: kepler_k2/low_level_command\n"
+        << "    state:\n"
+        << "      name: kepler_k2/low_level_state\n"
+        << "    status:\n"
+        << "      name: kepler_k2/bridge_status\n"
+        << "adapter:\n"
+        << "  kind: kepler_k2\n"
+        << "  robot_model: k2\n"
+        << "  command_mode: torque_pd_passthrough\n"
+        << "  connection:\n"
+        << "    transport: udp\n"
+        << "    interface_hint: robot_lan0\n"
+        << "  startup:\n"
+        << "    read_initial_state_timeout_ms: 1000\n"
+        << "    require_healthy_hardware: true\n"
+        << "  safety:\n"
+        << "    safe_command_profile: zero_torque\n"
+        << "    allow_safe_command_during_shutdown: true\n"
+        << "joint_mapping:\n"
+        << "  validation:\n"
+        << "    expected_sim_joint_count: 1\n"
+        << "    expected_hardware_joint_count: 1\n"
+        << "    require_dense_enabled_sim_indexes: true\n"
+        << "    require_dense_enabled_hardware_indexes: true\n"
+        << "    require_unique_enabled_sim_names: true\n"
+        << "    require_unique_enabled_hardware_names: true\n"
+        << "  entries:\n"
+        << "    - sim_index: 0\n"
+        << "      hardware_index: 0\n"
+        << "      sim_name: joint0\n"
+        << "      hardware_name: motor0\n"
+        << "      label: joint 0\n"
+        << "      enabled: true\n"
+        << "      transforms:\n"
+        << "        position: {sign: 1.0, offset: 0.0}\n"
+        << "        velocity: {sign: 1.0, offset: 0.0}\n"
+        << "        effort: {sign: 1.0, offset: 0.0}\n"
+        << "        stiffness: {sign: 1.0, offset: 0.0}\n"
+        << "        damping: {sign: 1.0, offset: 0.0}\n"
+        << "        acceleration: {sign: 1.0, offset: 0.0}\n"
+        << "      sim_limits:\n"
+        << "        position: {lower: -1.0, upper: 1.0}\n"
+        << "      hardware_limits:\n"
+        << "        position: {lower: -1.0, upper: 1.0}\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(!result.succeeded());
+  assert(result.status == BridgeConfigLoadStatus::kRejected);
+  assert(HasIssueCode(result, BridgeConfigIssueCode::kInvalidValue));
 }
 
 }
@@ -208,5 +385,7 @@ int main() {
   TestLoadsSampleBridgeConfig();
   TestRejectsUnsupportedFaultPolicyMode();
   TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth();
+  TestLoadsUnknownRobotKindAsFactoryInput();
+  TestRejectsNegativeDdsDomainId();
   return 0;
 }

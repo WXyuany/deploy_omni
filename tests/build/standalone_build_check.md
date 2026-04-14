@@ -1,22 +1,26 @@
 # Standalone build check
 
-`kepler_k2_bridge` is currently wired as a thin process entrypoint that loads startup config once, freezes runtime values, and then assembles these existing pieces:
+`kepler_k2_bridge` is currently wired as a thin process entrypoint that loads startup config once, freezes runtime values, selects a registered robot factory, and then assembles these existing pieces:
 
 - `bridge::config::load_bridge_config()`
+- `bridge::app::create_robot_assembly()`
 - `bridge::core::BridgeRunner`
-- `bridge::dds::make_lowcmd_codec()`
-- `bridge::dds::make_lowstate_codec()`
+- `idl/bridge/BridgeMessages.idl` and generated Fast DDS artifacts in the same folder
+- `bridge::dds::create_dds_assembly()`
+- `bridge::dds::make_dds_runtime()`
 - `bridge::adapters::kepler_k2::KeplerK2Adapter`
 - `bridge::config::JointMap`
 
-The app now reads `config/kepler_k2.sample.yaml` by default, validates the current sample schema locally inside `bridge_config`, and freezes runner, adapter, and joint-map subsets before runtime wiring begins.
+The app now reads `config/kepler_k2.sample.yaml` by default, validates the current sample schema locally inside `bridge_config`, freezes runner, adapter, and joint-map subsets, and lets the app factory map `adapter.kind` to the correct runtime assembly before wiring begins.
 
-The current repository state still does not provide concrete implementation files for `bridge::dds::DdsCommandIngress` or `bridge::dds::DdsStateEgress`. To keep the app linkable without moving lifecycle or loop ownership out of `BridgeRunner`, `src/apps/kepler_k2_bridge_main.cpp` still uses the smallest local seam possible:
+The current repository state now provides a hand-written DDS facade/runtime layer. `RobotAssemblyFactory` obtains a DDS assembly from `bridge::dds::create_dds_assembly()`, and that factory owns:
 
-- a local ingress that is prepared to decode DDS command samples and project them through `JointMap::project_command_sim_to_hardware()` before submitting hardware-ordered commands to the runner
-- a local egress that projects hardware-ordered adapter state through `JointMap::project_state_hardware_to_sim()` before reusing the existing low-state encoder and retaining publications in-process
+- generated Fast DDS type support registration
+- participant / publisher / subscriber ownership via `DdsRuntime`
+- a command ingress that translates generated `LowCmd` messages into runner-facing `CommandFrame`
+- a state egress that projects runner state into generated `LowState` / `BridgeStatus` publications
 
-This intentionally preserves the ownership boundary from `docs/architecture/bridge-module-boundaries.md`: the app only assembles modules and chooses an exit code, while `BridgeRunner` still owns initialization, the periodic read/publish cycle, startup safe-idle behavior, stop request handling, and shutdown.
+This intentionally keeps process-level wiring thin: the app loads config, selects the robot assembly factory, and chooses an exit code, while `BridgeRunner` owns initialization, the periodic read/publish cycle, startup safe-idle behavior, stop request handling, and shutdown. DDS generated types stay in `bridge/dds`, not in `bridge/core`.
 
 Build verification command:
 

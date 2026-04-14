@@ -18,9 +18,9 @@ This document is the source-of-truth ownership map for the standalone bridge fra
 | Target module | Tag | Owns | Must not own |
 | --- | --- | --- | --- |
 | `bridge_app_main` | `app` | Process entrypoint, CLI/env handoff, config path selection, assembly of runner + transports + adapter, exit code selection | Control loop logic, DDS codec details, SDK I/O, mapping math |
-| `bridge_runner` | `core` | Bridge lifecycle state machine (`Created -> Initializing -> WaitingForState -> Active -> Faulted -> Stopping -> Stopped`), startup/shutdown order, periodic read/publish loop, latest-command buffer consumption, watchdog, first-command safe-idle policy, fault transitions | DDS serialization details, SDK-specific APIs, file parsing, optional legacy behavior |
-| `dds_ingress` | `transport` | DDS subscription setup, DDS message decode into transport command objects, callback-side validation needed to accept/reject transport messages, handoff into runner-owned latest-command buffer | SDK writes, periodic loop ownership, robot mapping policy, lifecycle state machine |
-| `dds_egress` | `transport` | DDS publisher setup, encode/publish of bridge output messages, degraded/fault status publication | SDK reads, runner lifecycle decisions, joint mapping semantics |
+| `bridge_runner` | `core` | Bridge lifecycle state machine (`Created -> Initializing -> WaitingForState -> Active -> Faulted -> Stopping -> Stopped`), startup/shutdown order, periodic read/publish loop, latest-command buffer consumption, watchdog, first-command safe-idle policy, fault transitions | DDS runtime setup, generated DDS message types, SDK-specific APIs, file parsing, optional legacy behavior |
+| `dds_ingress` | `transport` | DDS subscription setup, reception of generated DDS command messages, command translation into `CommandFrame`, sim->hardware joint projection, handoff into runner-owned latest-command buffer | SDK writes, periodic loop ownership, lifecycle state machine |
+| `dds_egress` | `transport` | DDS publisher setup, hardware->sim joint projection, generated DDS state/status message filling, DDS publication | SDK reads, runner lifecycle decisions |
 | `intermediate_frames` | `core` | Robot-agnostic `CommandFrame`, `StateFrame`, status/fault enums, timestamps/sequence fields required by the closed loop | DDS wire types, SDK handles, robot-specific joint naming assumptions |
 | `joint_mapping` | `core` | Declarative mapping between transport-level joints and intermediate frames, ordering/index normalization, limits needed for frame validation, command/state field projection rules | DDS transport construction, SDK calls, lifecycle threading |
 | `config_loader` | `config` | Startup-time file loading, schema validation, config normalization, frozen config object creation for runner/transport/adapter wiring | Runtime hot reload, loop execution, SDK I/O, fault recovery policy changes at runtime |
@@ -63,20 +63,19 @@ This document is the source-of-truth ownership map for the standalone bridge fra
 
 ### Command flow
 
-1. `dds_ingress` receives a DDS command message.
-2. `dds_ingress` converts wire data into a transport command object and rejects malformed transport payloads.
-3. `joint_mapping` and `intermediate_frames` rules are used to build a validated `CommandFrame` suitable for the bridge core.
-4. `bridge_runner` stores the latest valid command frame and decides when it becomes active in the periodic cycle.
-5. `robot_sdk_adapter` translates the active `CommandFrame` into SDK-native command calls.
-6. If no valid command has arrived yet, `bridge_runner` sends safe idle behavior instead of inferred hold-position behavior.
+1. `dds_ingress` receives the generated DDS command message and rejects malformed transport input.
+2. `dds_ingress` uses `joint_mapping` and `intermediate_frames` rules to build a validated hardware-ordered `CommandFrame` suitable for the bridge core.
+3. `bridge_runner` stores the latest valid command frame and decides when it becomes active in the periodic cycle.
+4. `robot_sdk_adapter` translates the active `CommandFrame` into SDK-native command calls.
+5. If no valid command has arrived yet, `bridge_runner` sends safe idle behavior instead of inferred hold-position behavior.
 
 ### State flow
 
 1. `bridge_runner` triggers a periodic read.
 2. `robot_sdk_adapter` reads robot state from the SDK.
 3. Optional `imu_source` contributes IMU data if configured.
-4. `joint_mapping` projects SDK state into a robot-agnostic `StateFrame`.
-5. `dds_egress` encodes the resulting state/status into DDS output messages and publishes them.
+4. `dds_egress` projects SDK-derived state into a robot-agnostic/sim-ordered shape and fills generated DDS state/status messages.
+5. `dds_egress` publishes the resulting typed DDS output messages.
 
 ## Config ownership boundaries
 

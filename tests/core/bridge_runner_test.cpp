@@ -15,14 +15,14 @@ using bridge::core::AdapterCallStatus;
 using bridge::core::AdapterHealth;
 using bridge::core::AdapterHealthResult;
 using bridge::core::AdapterReadResult;
-using bridge::core::BridgeCommandIngress;
-using bridge::core::BridgeCommandSink;
 using bridge::core::BridgeFault;
 using bridge::core::BridgeRunner;
 using bridge::core::BridgeRunnerConfig;
 using bridge::core::BridgeRunnerStatus;
 using bridge::core::BridgeRuntimeEventSink;
 using bridge::core::BridgeStateEgress;
+using bridge::core::BridgeCommandIngress;
+using bridge::core::BridgeCommandSink;
 using bridge::core::CommandFrame;
 using bridge::core::CommandSubmissionResult;
 using bridge::core::ControlMode;
@@ -136,15 +136,9 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
 
   [[nodiscard]] int initialize_count() const noexcept { return initialize_count_; }
   [[nodiscard]] int read_count() const noexcept { return read_count_; }
-  [[nodiscard]] int write_command_count() const noexcept {
-    return write_command_count_;
-  }
-  [[nodiscard]] int write_safe_command_count() const noexcept {
-    return write_safe_command_count_;
-  }
-  [[nodiscard]] int query_health_count() const noexcept {
-    return query_health_count_;
-  }
+  [[nodiscard]] int write_command_count() const noexcept { return write_command_count_; }
+  [[nodiscard]] int write_safe_command_count() const noexcept { return write_safe_command_count_; }
+  [[nodiscard]] int query_health_count() const noexcept { return query_health_count_; }
   [[nodiscard]] int shutdown_count() const noexcept { return shutdown_count_; }
   [[nodiscard]] const std::optional<CommandFrame>& last_written_command() const noexcept {
     return last_written_command_;

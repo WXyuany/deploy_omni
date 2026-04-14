@@ -34,6 +34,18 @@ enum class BridgeSubsection {
   kFaultPolicy,
 };
 
+enum class DdsSubsection {
+  kNone,
+  kTopics,
+};
+
+enum class DdsTopicSelection {
+  kNone,
+  kCommand,
+  kState,
+  kStatus,
+};
+
 enum class AdapterSubsection {
   kNone,
   kConnection,
@@ -69,6 +81,10 @@ struct RawBridgeConfig {
   std::optional<std::string> adapter_kind;
   std::optional<std::string> robot_model;
   std::optional<std::string> command_mode;
+  std::optional<int> dds_domain_id;
+  std::optional<std::string> dds_command_topic;
+  std::optional<std::string> dds_state_topic;
+  std::optional<std::string> dds_status_topic;
   std::optional<std::string> connection_transport;
   std::optional<std::string> connection_interface_hint;
   std::optional<int> read_initial_state_timeout_ms;
@@ -349,6 +365,8 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
                                std::vector<BridgeConfigIssue>* issues) {
   TopSection top = TopSection::kNone;
   BridgeSubsection bridge_subsection = BridgeSubsection::kNone;
+  DdsSubsection dds_subsection = DdsSubsection::kNone;
+  DdsTopicSelection dds_topic_selection = DdsTopicSelection::kNone;
   AdapterSubsection adapter_subsection = AdapterSubsection::kNone;
   JointMappingSubsection joint_mapping_subsection = JointMappingSubsection::kNone;
   EntrySubsection entry_subsection = EntrySubsection::kNone;
@@ -357,6 +375,8 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   for (const ParsedLine& line : lines) {
     if (line.indent == 0) {
       bridge_subsection = BridgeSubsection::kNone;
+      dds_subsection = DdsSubsection::kNone;
+      dds_topic_selection = DdsTopicSelection::kNone;
       adapter_subsection = AdapterSubsection::kNone;
       joint_mapping_subsection = JointMappingSubsection::kNone;
       entry_subsection = EntrySubsection::kNone;
@@ -474,6 +494,71 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           }
         }
       }
+      continue;
+    }
+
+    if (top == TopSection::kDds) {
+      if (line.indent == 2) {
+        dds_subsection = DdsSubsection::kNone;
+        dds_topic_selection = DdsTopicSelection::kNone;
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid dds line: " + line.text);
+          continue;
+        }
+
+        if (key_value->second.empty() && key_value->first == "topics") {
+          dds_subsection = DdsSubsection::kTopics;
+          continue;
+        }
+
+        if (key_value->first == "domain_id") {
+          assign_required<int>(&raw->dds_domain_id, "dds.domain_id",
+                               key_value->second, issues,
+                               BridgeConfigIssueCode::kInvalidValue);
+        }
+        continue;
+      }
+
+      if (line.indent == 4 && dds_subsection == DdsSubsection::kTopics) {
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid dds.topics line: " + line.text);
+          continue;
+        }
+
+        if (key_value->first == "command") {
+          dds_topic_selection = DdsTopicSelection::kCommand;
+        } else if (key_value->first == "state") {
+          dds_topic_selection = DdsTopicSelection::kState;
+        } else if (key_value->first == "status") {
+          dds_topic_selection = DdsTopicSelection::kStatus;
+        }
+        continue;
+      }
+
+      if (line.indent == 6 && dds_subsection == DdsSubsection::kTopics) {
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid dds topic detail line: " + line.text);
+          continue;
+        }
+
+        if (key_value->first == "name") {
+          if (dds_topic_selection == DdsTopicSelection::kCommand) {
+            raw->dds_command_topic = key_value->second;
+          } else if (dds_topic_selection == DdsTopicSelection::kState) {
+            raw->dds_state_topic = key_value->second;
+          } else if (dds_topic_selection == DdsTopicSelection::kStatus) {
+            raw->dds_status_topic = key_value->second;
+          }
+        }
+        continue;
+      }
+
       continue;
     }
 
@@ -830,6 +915,22 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.command_mode is required");
   }
+  if (!raw.dds_domain_id.has_value()) {
+    push_issue(issues, BridgeConfigIssueCode::kMissingField,
+               "dds.domain_id is required");
+  }
+  if (!raw.dds_command_topic.has_value() || raw.dds_command_topic->empty()) {
+    push_issue(issues, BridgeConfigIssueCode::kMissingField,
+               "dds.topics.command.name is required");
+  }
+  if (!raw.dds_state_topic.has_value() || raw.dds_state_topic->empty()) {
+    push_issue(issues, BridgeConfigIssueCode::kMissingField,
+               "dds.topics.state.name is required");
+  }
+  if (!raw.dds_status_topic.has_value() || raw.dds_status_topic->empty()) {
+    push_issue(issues, BridgeConfigIssueCode::kMissingField,
+               "dds.topics.status.name is required");
+  }
   if (!raw.connection_transport.has_value() || raw.connection_transport->empty()) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.connection.transport is required");
@@ -864,10 +965,6 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     return std::nullopt;
   }
 
-  if (*raw.adapter_kind != "kepler_k2") {
-    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
-               "adapter.kind must be kepler_k2");
-  }
   if (*raw.startup_idle_mode != "zero_torque") {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "bridge.startup_idle_policy.mode must be zero_torque");
@@ -901,6 +998,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   if (!initialize_timeout_ns.has_value()) {
     push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
                "adapter.startup.read_initial_state_timeout_ms must be non-negative");
+  }
+  if (*raw.dds_domain_id < 0) {
+    push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+               "dds.domain_id must be non-negative");
   }
 
   if (!issues->empty()) {
@@ -947,8 +1048,13 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
 
   BridgeStartupConfig config;
   config.source_path = file_path;
+  config.robot_type = *raw.adapter_kind;
   config.runner.loop_period_ns = *loop_period_ns;
   config.runner.command_stale_timeout_ns = *stale_timeout_ns;
+  config.dds.domain_id = static_cast<std::uint32_t>(*raw.dds_domain_id);
+  config.dds.topics.command = *raw.dds_command_topic;
+  config.dds.topics.state = *raw.dds_state_topic;
+  config.dds.topics.status = *raw.dds_status_topic;
   config.runner.startup_idle_policy =
       *raw.use_adapter_safe_command ? core::StartupIdlePolicy::kPreferSafeCommand
                                     : core::StartupIdlePolicy::kNoCommandWrite;
@@ -960,19 +1066,18 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.runner.fault_policy.continue_publishing_in_fault =
       *raw.publish_degraded_state_while_faulted;
 
-  config.adapter.session.robot_id = *raw.robot_name;
-  config.adapter.session.transport_address =
-      *raw.connection_transport + ":" + *raw.connection_interface_hint;
-  config.adapter.session.control_profile = *raw.command_mode;
-  config.adapter.session.initialize_timeout_ns = *initialize_timeout_ns;
-  config.adapter.session.read_timeout_ns = *loop_period_ns;
-  config.adapter.session.write_timeout_ns = *loop_period_ns;
-  config.adapter.safety.safe_command_supported =
-      *raw.use_adapter_safe_command && *raw.allow_safe_command_during_shutdown &&
-      *raw.safe_command_profile == "zero_torque";
-  config.adapter.safety.require_initial_state_before_motion =
+  config.adapter.kind = *raw.adapter_kind;
+  config.adapter.robot_name = *raw.robot_name;
+  config.adapter.robot_model = raw.robot_model.value_or("");
+  config.adapter.command_mode = *raw.command_mode;
+  config.adapter.connection.transport = *raw.connection_transport;
+  config.adapter.connection.interface_hint = *raw.connection_interface_hint;
+  config.adapter.startup.read_initial_state_timeout_ns = *initialize_timeout_ns;
+  config.adapter.startup.require_healthy_hardware =
       *raw.require_healthy_hardware;
-  config.adapter.safety.allow_command_when_imu_missing = true;
+  config.adapter.safety.safe_command_profile = *raw.safe_command_profile;
+  config.adapter.safety.allow_safe_command_during_shutdown =
+      *raw.allow_safe_command_during_shutdown;
   config.adapter.joint_names = std::move(joint_names);
 
   config.joint_map_validation = raw.joint_map_validation;

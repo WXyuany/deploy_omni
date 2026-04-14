@@ -1,0 +1,61 @@
+module bridge_wire {
+  struct LowCmd {
+    unsigned long long seq_id;
+    unsigned long long source_time_ns;
+    octet control_mode;
+    string mode_label;
+    boolean valid;
+    boolean stale;
+    boolean degraded;
+    sequence<double> position;
+    sequence<double> velocity;
+    sequence<double> effort;
+    sequence<double> stiffness;
+    sequence<double> damping;
+  };
+
+  struct LowState {
+    unsigned long long seq_id;
+    unsigned long long sample_time_ns;
+    unsigned long long publish_time_ns;
+    octet lifecycle_state;
+    octet active_mode;
+    string mode_label;
+    boolean valid;
+    boolean stale;
+    boolean degraded;
+    boolean command_stale;
+    sequence<double> position;
+    sequence<double> velocity;
+    sequence<double> effort;
+    sequence<double> acceleration;
+    boolean imu_present;
+    boolean imu_valid;
+    boolean imu_stale;
+    unsigned long long imu_sample_time_ns;
+    sequence<double> imu_orientation_xyzw;
+    sequence<double> imu_angular_velocity_xyz;
+    sequence<double> imu_linear_acceleration_xyz;
+  };
+
+  struct BridgeStatus {
+    unsigned long long seq_id;
+    unsigned long long sample_time_ns;
+    unsigned long long publish_time_ns;
+    octet lifecycle_state;
+    octet control_mode;
+    string mode_label;
+    boolean valid;
+    boolean stale;
+    boolean degraded;
+    boolean command_stale;
+    boolean fault_present;
+    octet fault_category;
+    octet fault_severity;
+    octet fault_lifecycle_state;
+    boolean fault_latched;
+    unsigned long long fault_sequence;
+    unsigned long long fault_timestamp_ns;
+    string fault_message;
+  };
+};
