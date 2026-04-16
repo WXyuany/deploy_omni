@@ -46,27 +46,6 @@ constexpr std::uint64_t kFallbackTickNs = 1'000'000;
   return values.empty() || values.size() == width;
 }
 
-void assign_to_slots(std::vector<double>* slots,
-                     const std::vector<double>& values,
-                     const std::vector<std::int64_t>& indices) {
-  if (values.empty()) {
-    return;
-  }
-
-  for (std::size_t joint = 0; joint < values.size(); ++joint) {
-    (*slots)[static_cast<std::size_t>(indices[joint])] = values[joint];
-  }
-}
-
-[[nodiscard]] std::vector<double> project_from_slots(
-    const std::vector<double>& slots, const std::vector<std::int64_t>& indices) {
-  std::vector<double> values(indices.size(), 0.0);
-  for (std::size_t joint = 0; joint < indices.size(); ++joint) {
-    values[joint] = slots[static_cast<std::size_t>(indices[joint])];
-  }
-  return values;
-}
-
 [[nodiscard]] bool is_motion_mode(const bridge::core::ControlMode mode) noexcept {
   return mode != bridge::core::ControlMode::kUnknown &&
          mode != bridge::core::ControlMode::kSafeIdle;
@@ -110,7 +89,7 @@ class Pm01Adapter::Impl {
     }
     if (initialized_) {
       return make_status_result(current_operational_status(),
-                                "pm01 adapter already initialized",
+                                already_initialized_detail(),
                                 persistent_fault_);
     }
 
@@ -122,23 +101,15 @@ class Pm01Adapter::Impl {
       return validation;
     }
 
-    dds_position_.assign(kPm01DdsMotorCount, 0.0);
-    dds_velocity_.assign(kPm01DdsMotorCount, 0.0);
-    dds_effort_.assign(kPm01DdsMotorCount, 0.0);
-    dds_stiffness_.assign(kPm01DdsMotorCount, 0.0);
-    dds_damping_.assign(kPm01DdsMotorCount, 0.0);
-    dds_acceleration_.assign(kPm01DdsMotorCount, 0.0);
-    active_mode_ = bridge::core::ControlMode::kSafeIdle;
-    mode_label_ = control_mode_label(active_mode_);
+    vendor_session_.initialize(config_.motion_state.initial_task);
     initialized_ = true;
     connection_alive_ = true;
     has_read_state_ = false;
-    current_motion_task_ = config_.motion_state.initial_task;
     lifecycle_state_ = bridge::core::LifecycleState::kWaitingForState;
     persistent_fault_.reset();
 
     return make_status_result(bridge::core::AdapterCallStatus::kOk,
-                              "pm01 adapter initialized");
+                              initialized_detail());
   }
 
   [[nodiscard]] bridge::core::AdapterReadResult read_state() {
@@ -165,17 +136,17 @@ class Pm01Adapter::Impl {
     state.sample_time_ns = synthetic_time_ns_;
     state.publish_time_ns = synthetic_time_ns_;
     state.lifecycle_state = lifecycle_state_;
-    state.active_mode = active_mode_;
-    state.mode_label = mode_label_;
+    state.active_mode = vendor_session_.active_mode();
+    state.mode_label = vendor_session_.mode_label();
     state.valid = true;
     state.stale = false;
     state.degraded = false;
     state.command_stale = false;
-    state.joints.position = project_from_slots(dds_position_, config_.dds_joint_indices);
-    state.joints.velocity = project_from_slots(dds_velocity_, config_.dds_joint_indices);
-    state.joints.effort = project_from_slots(dds_effort_, config_.dds_joint_indices);
+    state.joints.position = vendor_session_.project_position(config_.dds_joint_indices);
+    state.joints.velocity = vendor_session_.project_velocity(config_.dds_joint_indices);
+    state.joints.effort = vendor_session_.project_effort(config_.dds_joint_indices);
     state.joints.acceleration =
-        project_from_slots(dds_acceleration_, config_.dds_joint_indices);
+        vendor_session_.project_acceleration(config_.dds_joint_indices);
 
     if (const auto imu = build_imu_sample_locked(); imu.has_value()) {
       state.imu = imu;
@@ -183,7 +154,7 @@ class Pm01Adapter::Impl {
 
     result.state = std::move(state);
     result.result = make_status_result(bridge::core::AdapterCallStatus::kOk,
-                                       "pm01 state read complete");
+                                       read_detail());
     return result;
   }
 
@@ -231,13 +202,13 @@ class Pm01Adapter::Impl {
                                "initial state read is required before motion commands");
     }
     if (is_motion_mode(command.mode) && config_.motion_state.required) {
-      if (!current_motion_task_.has_value()) {
+      if (!vendor_session_.motion_task().has_value()) {
         return make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
                                  bridge::core::FaultCategory::kSafety,
                                  bridge::core::FaultSeverity::kRecoverable,
                                  "motion state is required before PM01 command write");
       }
-      if (*current_motion_task_ != config_.motion_state.required_task) {
+      if (*vendor_session_.motion_task() != config_.motion_state.required_task) {
         return make_error_result(
             bridge::core::AdapterCallStatus::kRetryableError,
             bridge::core::FaultCategory::kSafety,
@@ -249,24 +220,12 @@ class Pm01Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
     last_write_time_ns_ = synthetic_time_ns_;
-    dds_acceleration_.assign(kPm01DdsMotorCount, 0.0);
-    if (!command.joints.velocity.empty()) {
-      dds_acceleration_ = dds_velocity_;
-    }
-    assign_to_slots(&dds_position_, command.joints.position, config_.dds_joint_indices);
-    assign_to_slots(&dds_velocity_, command.joints.velocity, config_.dds_joint_indices);
-    assign_to_slots(&dds_effort_, command.joints.effort, config_.dds_joint_indices);
-    assign_to_slots(&dds_stiffness_, command.joints.stiffness,
-                    config_.dds_joint_indices);
-    assign_to_slots(&dds_damping_, command.joints.damping, config_.dds_joint_indices);
-    active_mode_ = command.mode;
-    mode_label_ = command.mode_label.empty() ? control_mode_label(command.mode)
-                                             : command.mode_label;
+    vendor_session_.apply_command(command, config_.dds_joint_indices);
 
     const bridge::core::AdapterCallStatus status =
         command.degraded ? bridge::core::AdapterCallStatus::kDegraded
                          : bridge::core::AdapterCallStatus::kOk;
-    return make_status_result(status, "pm01 command write complete");
+    return make_status_result(status, write_detail(command));
   }
 
   [[nodiscard]] bridge::core::AdapterCallResult write_safe_command() {
@@ -289,14 +248,10 @@ class Pm01Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
     last_write_time_ns_ = synthetic_time_ns_;
-    std::fill(dds_velocity_.begin(), dds_velocity_.end(), 0.0);
-    std::fill(dds_effort_.begin(), dds_effort_.end(), 0.0);
-    std::fill(dds_acceleration_.begin(), dds_acceleration_.end(), 0.0);
-    active_mode_ = bridge::core::ControlMode::kSafeIdle;
-    mode_label_ = control_mode_label(active_mode_);
+    vendor_session_.apply_safe_command();
 
     return make_status_result(bridge::core::AdapterCallStatus::kOk,
-                              "pm01 safe command applied");
+                              safe_command_detail());
   }
 
   [[nodiscard]] bridge::core::AdapterHealthResult query_health() const {
@@ -304,7 +259,7 @@ class Pm01Adapter::Impl {
 
     bridge::core::AdapterHealthResult result;
     result.result = make_status_result(current_operational_status(),
-                                       "pm01 adapter health queried",
+                                       health_detail_locked(),
                                        persistent_fault_);
     result.health.state = health_state_locked();
     result.health.safe_command_supported = config_.safety.safe_command_supported;
@@ -329,23 +284,150 @@ class Pm01Adapter::Impl {
     connection_alive_ = false;
     initialized_ = false;
     has_read_state_ = false;
-    current_motion_task_.reset();
-    dds_position_.clear();
-    dds_velocity_.clear();
-    dds_effort_.clear();
-    dds_stiffness_.clear();
-    dds_damping_.clear();
-    dds_acceleration_.clear();
-    active_mode_ = bridge::core::ControlMode::kUnknown;
-    mode_label_ = control_mode_label(active_mode_);
+    vendor_session_.reset();
     persistent_fault_.reset();
     lifecycle_state_ = bridge::core::LifecycleState::kStopped;
 
     return make_status_result(bridge::core::AdapterCallStatus::kOk,
-                              "adapter shutdown complete");
+                              shutdown_detail());
   }
 
  private:
+  class DeterministicVendorSession {
+   public:
+    explicit DeterministicVendorSession(const std::size_t dds_motor_count =
+                                            kPm01DdsMotorCount)
+        : position_(dds_motor_count, 0.0),
+          velocity_(dds_motor_count, 0.0),
+          effort_(dds_motor_count, 0.0),
+          stiffness_(dds_motor_count, 0.0),
+          damping_(dds_motor_count, 0.0),
+          acceleration_(dds_motor_count, 0.0) {}
+
+    void initialize(std::optional<std::string> initial_motion_task) {
+      assign_zeroed(position_);
+      assign_zeroed(velocity_);
+      assign_zeroed(effort_);
+      assign_zeroed(stiffness_);
+      assign_zeroed(damping_);
+      assign_zeroed(acceleration_);
+      current_motion_task_ = std::move(initial_motion_task);
+      set_active_mode(bridge::core::ControlMode::kSafeIdle,
+                      control_mode_label(bridge::core::ControlMode::kSafeIdle));
+    }
+
+    void apply_command(const bridge::core::CommandFrame& command,
+                       const std::vector<std::int64_t>& indices) {
+      assign_zeroed(acceleration_);
+      if (!command.joints.velocity.empty()) {
+        acceleration_ = velocity_;
+      }
+
+      assign_to_slots(position_, command.joints.position, indices);
+      assign_to_slots(velocity_, command.joints.velocity, indices);
+      assign_to_slots(effort_, command.joints.effort, indices);
+      assign_to_slots(stiffness_, command.joints.stiffness, indices);
+      assign_to_slots(damping_, command.joints.damping, indices);
+      set_active_mode(command.mode,
+                      command.mode_label.empty() ? control_mode_label(command.mode)
+                                                 : command.mode_label);
+    }
+
+    void apply_safe_command() {
+      std::fill(velocity_.begin(), velocity_.end(), 0.0);
+      std::fill(effort_.begin(), effort_.end(), 0.0);
+      std::fill(acceleration_.begin(), acceleration_.end(), 0.0);
+      set_active_mode(bridge::core::ControlMode::kSafeIdle,
+                      control_mode_label(bridge::core::ControlMode::kSafeIdle));
+    }
+
+    void reset() {
+      position_.clear();
+      velocity_.clear();
+      effort_.clear();
+      stiffness_.clear();
+      damping_.clear();
+      acceleration_.clear();
+      current_motion_task_.reset();
+      mode_ = bridge::core::ControlMode::kUnknown;
+      mode_label_ = control_mode_label(mode_);
+    }
+
+    [[nodiscard]] std::vector<double> project_position(
+        const std::vector<std::int64_t>& indices) const {
+      return project_from_slots(position_, indices);
+    }
+
+    [[nodiscard]] std::vector<double> project_velocity(
+        const std::vector<std::int64_t>& indices) const {
+      return project_from_slots(velocity_, indices);
+    }
+
+    [[nodiscard]] std::vector<double> project_effort(
+        const std::vector<std::int64_t>& indices) const {
+      return project_from_slots(effort_, indices);
+    }
+
+    [[nodiscard]] std::vector<double> project_acceleration(
+        const std::vector<std::int64_t>& indices) const {
+      return project_from_slots(acceleration_, indices);
+    }
+
+    [[nodiscard]] bridge::core::ControlMode active_mode() const noexcept {
+      return mode_;
+    }
+
+    [[nodiscard]] const std::string& mode_label() const noexcept {
+      return mode_label_;
+    }
+
+    [[nodiscard]] const std::optional<std::string>& motion_task() const noexcept {
+      return current_motion_task_;
+    }
+
+   private:
+    static void assign_zeroed(std::vector<double>& slots) {
+      slots.assign(slots.size(), 0.0);
+    }
+
+    static void assign_to_slots(std::vector<double>& slots,
+                                const std::vector<double>& values,
+                                const std::vector<std::int64_t>& indices) {
+      if (values.empty()) {
+        return;
+      }
+
+      for (std::size_t joint = 0; joint < values.size(); ++joint) {
+        slots[static_cast<std::size_t>(indices[joint])] = values[joint];
+      }
+    }
+
+    [[nodiscard]] static std::vector<double> project_from_slots(
+        const std::vector<double>& slots,
+        const std::vector<std::int64_t>& indices) {
+      std::vector<double> values(indices.size(), 0.0);
+      for (std::size_t joint = 0; joint < indices.size(); ++joint) {
+        values[joint] = slots[static_cast<std::size_t>(indices[joint])];
+      }
+      return values;
+    }
+
+    void set_active_mode(const bridge::core::ControlMode mode, std::string label) {
+      mode_ = mode;
+      mode_label_ = std::move(label);
+    }
+
+    std::vector<double> position_;
+    std::vector<double> velocity_;
+    std::vector<double> effort_;
+    std::vector<double> stiffness_;
+    std::vector<double> damping_;
+    std::vector<double> acceleration_;
+    std::optional<std::string> current_motion_task_;
+    bridge::core::ControlMode mode_{bridge::core::ControlMode::kUnknown};
+    std::string mode_label_{control_mode_label(mode_)};
+  };
+
   [[nodiscard]] bridge::core::AdapterCallResult validate_config_locked() {
     if (config_.session.robot_id.empty()) {
       return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
@@ -492,6 +574,47 @@ class Pm01Adapter::Impl {
     return bridge::core::AdapterCallStatus::kOk;
   }
 
+  [[nodiscard]] std::string already_initialized_detail() const {
+    return "pm01 adapter already initialized";
+  }
+
+  [[nodiscard]] std::string initialized_detail() const {
+    return config_.motion_state.initial_task.has_value()
+               ? "pm01 adapter initialized with configured motion task seam"
+               : "pm01 adapter initialized";
+  }
+
+  [[nodiscard]] std::string read_detail() const {
+    return config_.publish_default_imu_when_missing
+               ? "pm01 state read complete with default IMU seam"
+               : "pm01 state read complete";
+  }
+
+  [[nodiscard]] std::string write_detail(
+      const bridge::core::CommandFrame& command) const {
+    return "pm01 command write complete in mode " +
+           (command.mode_label.empty() ? control_mode_label(command.mode)
+                                       : command.mode_label);
+  }
+
+  [[nodiscard]] std::string safe_command_detail() const {
+    return "pm01 safe command applied";
+  }
+
+  [[nodiscard]] std::string health_detail_locked() const {
+    if (lifecycle_state_ == bridge::core::LifecycleState::kStopped) {
+      return "adapter stopped";
+    }
+    if (!initialized_) {
+      return "adapter not initialized";
+    }
+    return "pm01 adapter healthy";
+  }
+
+  [[nodiscard]] std::string shutdown_detail() const {
+    return "adapter shutdown complete";
+  }
+
   [[nodiscard]] bridge::core::AdapterCallResult make_status_result(
       const bridge::core::AdapterCallStatus status, std::string detail,
       std::optional<bridge::core::BridgeFault> fault = std::nullopt) const {
@@ -533,15 +656,7 @@ class Pm01Adapter::Impl {
   bool connection_alive_{false};
   bool has_read_state_{false};
   bridge::core::LifecycleState lifecycle_state_{bridge::core::LifecycleState::kCreated};
-  bridge::core::ControlMode active_mode_{bridge::core::ControlMode::kUnknown};
-  std::string mode_label_{control_mode_label(active_mode_)};
-  std::optional<std::string> current_motion_task_;
-  std::vector<double> dds_position_;
-  std::vector<double> dds_velocity_;
-  std::vector<double> dds_effort_;
-  std::vector<double> dds_stiffness_;
-  std::vector<double> dds_damping_;
-  std::vector<double> dds_acceleration_;
+  DeterministicVendorSession vendor_session_;
 };
 
 Pm01Adapter::Pm01Adapter(Pm01AdapterConfig config)
