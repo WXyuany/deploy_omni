@@ -1,6 +1,9 @@
 #include <cassert>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 #include "../../include/bridge/adapters/pm01/pm01_adapter.hpp"
 
@@ -12,6 +15,17 @@ using bridge::core::AdapterCallStatus;
 using bridge::core::ControlMode;
 using bridge::core::FaultCategory;
 using bridge::core::LifecycleState;
+
+template <typename Adapter, typename = void>
+struct HasPublicUpdateMotionTask : std::false_type {};
+
+template <typename Adapter>
+struct HasPublicUpdateMotionTask<
+    Adapter,
+    std::void_t<decltype(std::declval<Adapter&>().update_motion_task(
+        std::declval<std::optional<std::string>>()))>> : std::true_type {};
+
+static_assert(!HasPublicUpdateMotionTask<Pm01Adapter>::value);
 
 Pm01AdapterConfig MakeBaseConfig() {
   Pm01AdapterConfig config;
@@ -34,6 +48,7 @@ Pm01AdapterConfig MakeBaseConfig() {
 
 Pm01AdapterConfig MakeMappedConfig() {
   Pm01AdapterConfig config = MakeBaseConfig();
+  config.motion_state.required = false;
   config.dds_joint_indices.clear();
   for (std::size_t index = 0; index < config.joint_names.size(); ++index) {
     config.dds_joint_indices.push_back(static_cast<std::int64_t>(23 - index));
@@ -77,32 +92,28 @@ void TestMotionStateGateBlocksCommandUntilJointBridgeIsActive() {
   assert(blocked.status == AdapterCallStatus::kRetryableError);
   assert(blocked.fault.has_value());
   assert(blocked.fault->category == FaultCategory::kSafety);
-
-  adapter.update_motion_task("joint_bridge");
-  assert(adapter.write_command(MakeCommand(ControlMode::kPosition)).status ==
-         AdapterCallStatus::kOk);
-
-  adapter.update_motion_task("stand");
-  const auto blocked_again = adapter.write_command(MakeCommand(ControlMode::kPosition));
-  assert(blocked_again.status == AdapterCallStatus::kRetryableError);
-  assert(blocked_again.fault.has_value());
-  assert(blocked_again.fault->category == FaultCategory::kSafety);
 }
 
 void TestMotionStateGateUsesConfiguredRequiredTask() {
   Pm01AdapterConfig config = MakeBaseConfig();
   config.motion_state.required_task = "dance_mode";
+  config.motion_state.initial_task = "joint_bridge";
   Pm01Adapter adapter(config);
   assert(adapter.initialize().status == AdapterCallStatus::kOk);
   assert(adapter.read_state().result.status == AdapterCallStatus::kOk);
-
-  adapter.update_motion_task("joint_bridge");
   const auto blocked = adapter.write_command(MakeCommand(ControlMode::kPosition));
   assert(blocked.status == AdapterCallStatus::kRetryableError);
   assert(blocked.fault.has_value());
-  assert(blocked.fault->message.find("dance_mode") != std::string::npos);
+  assert(blocked.fault->category == FaultCategory::kSafety);
+}
 
-  adapter.update_motion_task("dance_mode");
+void TestInitialMotionTaskAllowsConfiguredMotionWrite() {
+  Pm01AdapterConfig config = MakeBaseConfig();
+  config.motion_state.initial_task = "joint_bridge";
+
+  Pm01Adapter adapter(config);
+  assert(adapter.initialize().status == AdapterCallStatus::kOk);
+  assert(adapter.read_state().result.status == AdapterCallStatus::kOk);
   assert(adapter.write_command(MakeCommand(ControlMode::kPosition)).status ==
          AdapterCallStatus::kOk);
 }
@@ -111,7 +122,6 @@ void TestDdsJointIndicesDriveReadbackProjection() {
   Pm01Adapter adapter(MakeMappedConfig());
   assert(adapter.initialize().status == AdapterCallStatus::kOk);
   assert(adapter.read_state().result.status == AdapterCallStatus::kOk);
-  adapter.update_motion_task("joint_bridge");
 
   auto command = MakeCommand(ControlMode::kPosition);
   for (std::size_t index = 0; index < command.joints.position.size(); ++index) {
@@ -169,6 +179,7 @@ int main() {
   TestConfigValidationFailsWhenDdsJointIndicesWidthIsWrong();
   TestMotionStateGateBlocksCommandUntilJointBridgeIsActive();
   TestMotionStateGateUsesConfiguredRequiredTask();
+  TestInitialMotionTaskAllowsConfiguredMotionWrite();
   TestDdsJointIndicesDriveReadbackProjection();
   TestReadStateProvidesDefaultImuWhenUnavailable();
   TestSafeCommandUnsupportedReportsCapability();

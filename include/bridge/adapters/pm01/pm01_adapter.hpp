@@ -65,8 +65,6 @@ class Pm01Adapter final : public bridge::core::RobotSdkAdapter {
 
   [[nodiscard]] const Pm01AdapterConfig& config() const noexcept;
 
-  void update_motion_task(std::optional<std::string> task);
-
   bridge::core::AdapterCallResult initialize() override;
   [[nodiscard]] bridge::core::AdapterReadResult read_state() override;
   bridge::core::AdapterCallResult write_command(

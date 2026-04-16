@@ -99,11 +99,6 @@ class Pm01Adapter::Impl {
     return config_;
   }
 
-  void update_motion_task(std::optional<std::string> task) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    current_motion_task_ = std::move(task);
-  }
-
   [[nodiscard]] bridge::core::AdapterCallResult initialize() {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -560,10 +555,6 @@ Pm01Adapter& Pm01Adapter::operator=(Pm01Adapter&&) noexcept = default;
 
 const Pm01AdapterConfig& Pm01Adapter::config() const noexcept {
   return impl_->config();
-}
-
-void Pm01Adapter::update_motion_task(std::optional<std::string> task) {
-  impl_->update_motion_task(std::move(task));
 }
 
 bridge::core::AdapterCallResult Pm01Adapter::initialize() {
