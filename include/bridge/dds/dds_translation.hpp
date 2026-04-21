@@ -3,7 +3,9 @@
 #include <optional>
 #include <string>
 
-#include "../../../idl/bridge/BridgeMessages.hpp"
+#include "unitree/idl/hg/LowCmd_.hpp"
+#include "unitree/idl/hg/LowState_.hpp"
+
 #include "../config/joint_map.hpp"
 #include "../core/types.hpp"
 
@@ -32,20 +34,15 @@ struct CommandTranslation {
 
 struct StateTranslation {
   TranslationResult result;
-  std::optional<bridge_wire::LowState> state;
-};
-
-struct StatusTranslation {
-  TranslationResult result;
-  std::optional<bridge_wire::BridgeStatus> status;
+  std::optional<unitree_hg::msg::dds_::LowState_> state;
 };
 
 [[nodiscard]] CommandTranslation translate_lowcmd_to_command(
-    const bridge_wire::LowCmd& message,
+    const unitree_hg::msg::dds_::LowCmd_& message,
     std::uint64_t receive_time_ns);
 
 [[nodiscard]] CommandTranslation translate_lowcmd_to_hardware_command(
-    const bridge_wire::LowCmd& message,
+    const unitree_hg::msg::dds_::LowCmd_& message,
     std::uint64_t receive_time_ns,
     const config::JointMap& joint_map);
 
@@ -53,13 +50,6 @@ struct StatusTranslation {
     const core::StateFrame& state);
 
 [[nodiscard]] StateTranslation translate_hardware_state_to_lowstate(
-    const core::StateFrame& hardware_state,
-    const config::JointMap& joint_map);
-
-[[nodiscard]] StatusTranslation translate_state_to_bridge_status(
-    const core::StateFrame& state);
-
-[[nodiscard]] StatusTranslation translate_hardware_state_to_bridge_status(
     const core::StateFrame& hardware_state,
     const config::JointMap& joint_map);
 

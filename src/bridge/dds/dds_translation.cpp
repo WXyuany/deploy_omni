@@ -1,13 +1,21 @@
 #include "../../../include/bridge/dds/dds_translation.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
 
+#include "unitree/idl/hg/IMUState_.hpp"
+#include "unitree/idl/hg/MotorCmd_.hpp"
+#include "unitree/idl/hg/MotorState_.hpp"
+
 namespace bridge::dds {
 namespace {
+
+constexpr std::size_t kUnitreeMotorSlotCount = 35U;
 
 [[nodiscard]] core::BridgeFault make_fault(const core::FaultCategory category,
                                            const core::FaultSeverity severity,
@@ -70,27 +78,6 @@ namespace {
   return 0U;
 }
 
-[[nodiscard]] std::uint8_t encode_lifecycle_state(
-    const core::LifecycleState state) noexcept {
-  switch (state) {
-    case core::LifecycleState::kCreated:
-      return 1U;
-    case core::LifecycleState::kInitializing:
-      return 2U;
-    case core::LifecycleState::kWaitingForState:
-      return 3U;
-    case core::LifecycleState::kActive:
-      return 4U;
-    case core::LifecycleState::kFaulted:
-      return 5U;
-    case core::LifecycleState::kStopping:
-      return 6U;
-    case core::LifecycleState::kStopped:
-      return 7U;
-  }
-  return 0U;
-}
-
 [[nodiscard]] bool has_only_finite_values(const std::vector<double>& values) {
   for (const double value : values) {
     if (!std::isfinite(value)) {
@@ -110,62 +97,64 @@ namespace {
   return std::nullopt;
 }
 
-[[nodiscard]] TranslationResult validate_lowcmd(const bridge_wire::LowCmd& message,
-                                                const std::uint64_t receive_time_ns) {
-  if (!message.valid()) {
+[[nodiscard]] std::uint64_t infer_sequence(
+    const unitree_hg::msg::dds_::LowCmd_& message) {
+  return static_cast<std::uint64_t>(message.reserve()[0]);
+}
+
+[[nodiscard]] std::uint64_t infer_source_time_ns(
+    const unitree_hg::msg::dds_::LowCmd_& message) {
+  return static_cast<std::uint64_t>(message.reserve()[1]);
+}
+
+[[nodiscard]] std::size_t configured_sim_width(const config::JointMap& joint_map) {
+  std::size_t width = 0;
+  for (const auto& entry : joint_map.entries()) {
+    width = std::max(width, entry.sim_index + 1);
+  }
+  return width;
+}
+
+[[nodiscard]] bool validate_motor_commands_finite(
+    const std::array<unitree_hg::msg::dds_::MotorCmd_, kUnitreeMotorSlotCount>& motors,
+    const std::size_t width) {
+  for (std::size_t index = 0; index < width; ++index) {
+    if (!std::isfinite(motors[index].q()) || !std::isfinite(motors[index].dq()) ||
+        !std::isfinite(motors[index].tau()) || !std::isfinite(motors[index].kp()) ||
+        !std::isfinite(motors[index].kd())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] TranslationResult validate_lowcmd(
+    const unitree_hg::msg::dds_::LowCmd_& message,
+    const std::uint64_t receive_time_ns,
+    const std::size_t width) {
+  if (width > kUnitreeMotorSlotCount) {
     return make_result(TranslationStatus::kRejected,
-                       "command message is marked invalid",
+                       "command width exceeds Unitree motor slot count",
                        make_fault(core::FaultCategory::kInvalidCommand,
                                   core::FaultSeverity::kRecoverable,
-                                  "command message is marked invalid",
-                                  message.seq_id(),
-                                  receive_time_ns != 0U ? receive_time_ns
-                                                        : message.source_time_ns()));
+                                  "command width exceeds Unitree motor slot count",
+                                  infer_sequence(message), receive_time_ns));
   }
-  if (decode_control_mode(message.control_mode()) == core::ControlMode::kUnknown) {
+  if (decode_control_mode(message.mode_machine()) == core::ControlMode::kUnknown) {
     return make_result(TranslationStatus::kUnsupported,
                        "unsupported command control mode",
                        make_fault(core::FaultCategory::kInvalidCommand,
                                   core::FaultSeverity::kRecoverable,
                                   "unsupported command control mode",
-                                  message.seq_id(),
-                                  receive_time_ns != 0U ? receive_time_ns
-                                                        : message.source_time_ns()));
+                                  infer_sequence(message), receive_time_ns));
   }
-
-  const std::size_t width = !message.position().empty()   ? message.position().size()
-                            : !message.velocity().empty() ? message.velocity().size()
-                            : !message.effort().empty()   ? message.effort().size()
-                            : !message.stiffness().empty() ? message.stiffness().size()
-                                                          : message.damping().size();
-  const auto same_width = [width](const std::vector<double>& values) {
-    return values.empty() || values.size() == width;
-  };
-  if (!same_width(message.position()) || !same_width(message.velocity()) ||
-      !same_width(message.effort()) || !same_width(message.stiffness()) ||
-      !same_width(message.damping())) {
+  if (!validate_motor_commands_finite(message.motor_cmd(), width)) {
     return make_result(TranslationStatus::kRejected,
-                       "command message vectors must share the same width",
+                       "command message contains non-finite motor values",
                        make_fault(core::FaultCategory::kInvalidCommand,
                                   core::FaultSeverity::kRecoverable,
-                                  "command message vectors must share the same width",
-                                  message.seq_id(),
-                                  receive_time_ns != 0U ? receive_time_ns
-                                                        : message.source_time_ns()));
-  }
-  if (!has_only_finite_values(message.position()) ||
-      !has_only_finite_values(message.velocity()) ||
-      !has_only_finite_values(message.effort()) ||
-      !has_only_finite_values(message.stiffness()) ||
-      !has_only_finite_values(message.damping())) {
-    return make_result(TranslationStatus::kRejected,
-                       "command message vectors must contain only finite values",
-                       make_fault(core::FaultCategory::kInvalidCommand,
-                                  core::FaultSeverity::kRecoverable,
-                                  "command message vectors must contain only finite values",
-                                  message.seq_id(),
-                                  receive_time_ns != 0U ? receive_time_ns
-                                                        : message.source_time_ns()));
+                                  "command message contains non-finite motor values",
+                                  infer_sequence(message), receive_time_ns));
   }
   return make_result(TranslationStatus::kOk, "lowcmd message validated");
 }
@@ -204,112 +193,111 @@ namespace {
   return make_result(TranslationStatus::kOk, "state validated");
 }
 
-[[nodiscard]] bridge_wire::LowState make_low_state_message(const core::StateFrame& state) {
-  bridge_wire::LowState message;
-  message.seq_id(state.sequence);
-  message.sample_time_ns(state.sample_time_ns);
-  message.publish_time_ns(state.publish_time_ns);
-  message.lifecycle_state(encode_lifecycle_state(state.lifecycle_state));
-  message.active_mode(encode_control_mode(state.active_mode));
-  message.mode_label(state.mode_label);
-  message.valid(state.valid);
-  message.stale(state.stale);
-  message.degraded(state.degraded);
-  message.command_stale(state.command_stale);
-  message.position(state.joints.position);
-  message.velocity(state.joints.velocity);
-  message.effort(state.joints.effort);
-  message.acceleration(state.joints.acceleration);
+[[nodiscard]] unitree_hg::msg::dds_::LowState_ make_low_state_message(
+    const core::StateFrame& state) {
+  unitree_hg::msg::dds_::LowState_ message;
+  message.version({1U, 0U});
+  message.mode_pr(0U);
+  message.mode_machine(encode_control_mode(state.active_mode));
+  message.tick(static_cast<std::uint32_t>(state.sequence));
+
+  auto motors = message.motor_state();
+  const std::size_t width = std::min<std::size_t>(state.joints.width(), kUnitreeMotorSlotCount);
+  for (std::size_t index = 0; index < width; ++index) {
+    motors[index].mode(encode_control_mode(state.active_mode));
+    motors[index].q(static_cast<float>(state.joints.position[index]));
+    motors[index].dq(static_cast<float>(state.joints.velocity[index]));
+    motors[index].ddq(static_cast<float>(state.joints.acceleration[index]));
+    motors[index].tau_est(static_cast<float>(state.joints.effort[index]));
+  }
+  message.motor_state(motors);
+
+  unitree_hg::msg::dds_::IMUState_ imu_state;
   if (state.imu.has_value()) {
-    message.imu_present(true);
-    message.imu_valid(state.imu->valid);
-    message.imu_stale(state.imu->stale);
-    message.imu_sample_time_ns(state.imu->sample_time_ns);
-    message.imu_orientation_xyzw(state.imu->orientation_xyzw);
-    message.imu_angular_velocity_xyz(state.imu->angular_velocity_xyz);
-    message.imu_linear_acceleration_xyz(state.imu->linear_acceleration_xyz);
-  } else {
-    message.imu_present(false);
-    message.imu_valid(false);
-    message.imu_stale(false);
-    message.imu_sample_time_ns(0U);
-    message.imu_orientation_xyzw({});
-    message.imu_angular_velocity_xyz({});
-    message.imu_linear_acceleration_xyz({});
+    std::array<float, 4> quaternion{0.0F, 0.0F, 0.0F, 1.0F};
+    std::array<float, 3> gyroscope{0.0F, 0.0F, 0.0F};
+    std::array<float, 3> accelerometer{0.0F, 0.0F, 0.0F};
+    std::copy_n(state.imu->orientation_xyzw.begin(), 4, quaternion.begin());
+    std::copy_n(state.imu->angular_velocity_xyz.begin(), 3, gyroscope.begin());
+    std::copy_n(state.imu->linear_acceleration_xyz.begin(), 3, accelerometer.begin());
+    imu_state.quaternion(quaternion);
+    imu_state.gyroscope(gyroscope);
+    imu_state.accelerometer(accelerometer);
   }
+  message.imu_state(imu_state);
   return message;
 }
 
-[[nodiscard]] bridge_wire::BridgeStatus make_status_message(const core::StateFrame& state) {
-  bridge_wire::BridgeStatus message;
-  message.seq_id(state.sequence);
-  message.sample_time_ns(state.sample_time_ns);
-  message.publish_time_ns(state.publish_time_ns);
-  message.lifecycle_state(encode_lifecycle_state(state.lifecycle_state));
-  message.control_mode(encode_control_mode(state.active_mode));
-  message.mode_label(state.mode_label);
-  message.valid(state.valid);
-  message.stale(state.stale);
-  message.degraded(state.degraded);
-  message.command_stale(state.command_stale);
-  if (state.fault.has_value() && state.fault->has_fault()) {
-    message.fault_present(true);
-    message.fault_category(static_cast<std::uint8_t>(state.fault->category));
-    message.fault_severity(static_cast<std::uint8_t>(state.fault->severity));
-    message.fault_lifecycle_state(encode_lifecycle_state(state.fault->lifecycle_state));
-    message.fault_latched(state.fault->latched);
-    message.fault_sequence(state.fault->sequence);
-    message.fault_timestamp_ns(state.fault->timestamp_ns);
-    message.fault_message(state.fault->message);
-  } else {
-    message.fault_present(false);
-    message.fault_category(0U);
-    message.fault_severity(0U);
-    message.fault_lifecycle_state(0U);
-    message.fault_latched(false);
-    message.fault_sequence(0U);
-    message.fault_timestamp_ns(0U);
-    message.fault_message("");
-  }
-  return message;
-}
+}  // namespace
 
-}
-
-CommandTranslation translate_lowcmd_to_command(const bridge_wire::LowCmd& message,
-                                               const std::uint64_t receive_time_ns) {
-  const TranslationResult validation = validate_lowcmd(message, receive_time_ns);
+CommandTranslation translate_lowcmd_to_command(
+    const unitree_hg::msg::dds_::LowCmd_& message,
+    const std::uint64_t receive_time_ns) {
+  constexpr std::size_t width = kUnitreeMotorSlotCount;
+  const TranslationResult validation = validate_lowcmd(message, receive_time_ns, width);
   if (!validation.succeeded()) {
     return {.result = validation, .command = std::nullopt};
   }
 
   core::CommandFrame command;
-  command.sequence = message.seq_id();
-  command.source_time_ns = message.source_time_ns();
+  command.sequence = infer_sequence(message);
+  command.source_time_ns = infer_source_time_ns(message);
   command.receive_time_ns = receive_time_ns;
-  command.mode = decode_control_mode(message.control_mode());
-  command.mode_label = message.mode_label();
-  command.valid = message.valid();
-  command.stale = message.stale();
-  command.degraded = message.degraded();
-  command.joints.position = message.position();
-  command.joints.velocity = message.velocity();
-  command.joints.effort = message.effort();
-  command.joints.stiffness = message.stiffness();
-  command.joints.damping = message.damping();
+  command.mode = decode_control_mode(message.mode_machine());
+  command.mode_label = "unitree_lowcmd";
+  command.valid = true;
+  command.stale = false;
+  command.degraded = false;
+  command.joints.position.resize(width);
+  command.joints.velocity.resize(width);
+  command.joints.effort.resize(width);
+  command.joints.stiffness.resize(width);
+  command.joints.damping.resize(width);
+  for (std::size_t index = 0; index < width; ++index) {
+    command.joints.position[index] = message.motor_cmd()[index].q();
+    command.joints.velocity[index] = message.motor_cmd()[index].dq();
+    command.joints.effort[index] = message.motor_cmd()[index].tau();
+    command.joints.stiffness[index] = message.motor_cmd()[index].kp();
+    command.joints.damping[index] = message.motor_cmd()[index].kd();
+  }
   return {.result = make_result(TranslationStatus::kOk, "translated lowcmd to command"),
           .command = std::move(command)};
 }
 
 CommandTranslation translate_lowcmd_to_hardware_command(
-    const bridge_wire::LowCmd& message, const std::uint64_t receive_time_ns,
+    const unitree_hg::msg::dds_::LowCmd_& message,
+    const std::uint64_t receive_time_ns,
     const config::JointMap& joint_map) {
-  CommandTranslation translated = translate_lowcmd_to_command(message, receive_time_ns);
-  if (!translated.result.succeeded() || !translated.command.has_value()) {
-    return translated;
+  const std::size_t width = configured_sim_width(joint_map);
+  const TranslationResult validation = validate_lowcmd(message, receive_time_ns, width);
+  if (!validation.succeeded()) {
+    return {.result = validation, .command = std::nullopt};
   }
+
+  core::CommandFrame command;
+  command.sequence = infer_sequence(message);
+  command.source_time_ns = infer_source_time_ns(message);
+  command.receive_time_ns = receive_time_ns;
+  command.mode = decode_control_mode(message.mode_machine());
+  command.mode_label = "unitree_lowcmd";
+  command.valid = true;
+  command.stale = false;
+  command.degraded = false;
+  command.joints.position.resize(width);
+  command.joints.velocity.resize(width);
+  command.joints.effort.resize(width);
+  command.joints.stiffness.resize(width);
+  command.joints.damping.resize(width);
+  for (std::size_t index = 0; index < width; ++index) {
+    command.joints.position[index] = message.motor_cmd()[index].q();
+    command.joints.velocity[index] = message.motor_cmd()[index].dq();
+    command.joints.effort[index] = message.motor_cmd()[index].tau();
+    command.joints.stiffness[index] = message.motor_cmd()[index].kp();
+    command.joints.damping[index] = message.motor_cmd()[index].kd();
+  }
+
   config::CommandProjectionResult projected =
-      joint_map.project_command_sim_to_hardware(*translated.command);
+      joint_map.project_command_sim_to_hardware(command);
   const std::optional<std::string> projection_error =
       first_projection_error(projected.issues);
   if (!projected.command.has_value() || projection_error.has_value()) {
@@ -347,28 +335,4 @@ StateTranslation translate_hardware_state_to_lowstate(
   return translate_state_to_lowstate(*projected.state);
 }
 
-StatusTranslation translate_state_to_bridge_status(const core::StateFrame& state) {
-  const TranslationResult validation = validate_state(state);
-  if (!validation.succeeded()) {
-    return {.result = validation, .status = std::nullopt};
-  }
-  return {.result = make_result(TranslationStatus::kOk, "translated state to bridge status"),
-          .status = make_status_message(state)};
-}
-
-StatusTranslation translate_hardware_state_to_bridge_status(
-    const core::StateFrame& hardware_state,
-    const config::JointMap& joint_map) {
-  config::StateProjectionResult projected =
-      joint_map.project_state_hardware_to_sim(hardware_state);
-  const std::optional<std::string> projection_error =
-      first_projection_error(projected.issues);
-  if (!projected.state.has_value() || projection_error.has_value()) {
-    return {.result = make_result(TranslationStatus::kRejected,
-                                  projection_error.value_or("joint-map state projection failed")),
-            .status = std::nullopt};
-  }
-  return translate_state_to_bridge_status(*projected.state);
-}
-
-}
+}  // namespace bridge::dds

@@ -1,8 +1,10 @@
 #include <cassert>
 #include <cmath>
-#include <cstdint>
 #include <string>
 #include <vector>
+
+#include "unitree/idl/hg/LowCmd_.hpp"
+#include "unitree/idl/hg/LowState_.hpp"
 
 #include "../../include/bridge/config/joint_map.hpp"
 #include "../../include/bridge/dds/dds_translation.hpp"
@@ -17,10 +19,10 @@ using bridge::core::BridgeFault;
 using bridge::core::ControlMode;
 using bridge::core::LifecycleState;
 using bridge::core::StateFrame;
-using bridge::dds::translate_hardware_state_to_bridge_status;
 using bridge::dds::translate_hardware_state_to_lowstate;
 using bridge::dds::translate_lowcmd_to_command;
 using bridge::dds::translate_lowcmd_to_hardware_command;
+using unitree_hg::msg::dds_::LowCmd_;
 
 JointMap MakeSwappingJointMap() {
   std::vector<JointMapEntry> entries;
@@ -40,27 +42,59 @@ JointMap MakeSwappingJointMap() {
   }
 
   JointMapValidationOptions options;
-  options.expected_sim_joint_count = 2U;
-  options.expected_hardware_joint_count = 2U;
+  options.require_dense_enabled_sim_indexes = false;
+  options.require_dense_enabled_hardware_indexes = false;
   const auto built = JointMap::build(std::move(entries), options);
   assert(built.succeeded());
   return *built.joint_map;
 }
 
-bridge_wire::LowCmd MakeLowCmd() {
-  bridge_wire::LowCmd message;
-  message.seq_id(12U);
-  message.source_time_ns(345U);
-  message.control_mode(5U);
-  message.mode_label("hybrid");
-  message.valid(true);
-  message.stale(false);
-  message.degraded(true);
-  message.position({1.0, 2.0});
-  message.velocity({3.0, 4.0});
-  message.effort({5.0, 6.0});
-  message.stiffness({7.0, 8.0});
-  message.damping({9.0, 10.0});
+JointMap MakeJointMapWithDisabledHighestSlot() {
+  std::vector<JointMapEntry> entries;
+  for (std::size_t index = 0; index < 3U; ++index) {
+    JointMapEntry entry;
+    entry.sim_index = index;
+    entry.hardware_index = index;
+    entry.sim_name = std::string("sim_") + std::to_string(index);
+    entry.hardware_name = std::string("hw_") + std::to_string(index);
+    entry.transforms.position = JointFieldTransform{};
+    entry.transforms.velocity = JointFieldTransform{};
+    entry.transforms.effort = JointFieldTransform{};
+    entry.transforms.stiffness = JointFieldTransform{};
+    entry.transforms.damping = JointFieldTransform{};
+    entry.transforms.acceleration = JointFieldTransform{};
+    entry.enabled = index != 2U;
+    entries.push_back(std::move(entry));
+  }
+
+  JointMapValidationOptions options;
+  options.require_dense_enabled_sim_indexes = false;
+  options.require_dense_enabled_hardware_indexes = false;
+  const auto built = JointMap::build(std::move(entries), options);
+  assert(built.succeeded());
+  return *built.joint_map;
+}
+
+LowCmd_ MakeLowCmd() {
+  LowCmd_ message;
+  message.mode_machine(5U);
+  auto reserve = message.reserve();
+  reserve[0] = 12U;
+  reserve[1] = 345U;
+  message.reserve(reserve);
+
+  auto motors = message.motor_cmd();
+  motors[0].q(1.0F);
+  motors[0].dq(3.0F);
+  motors[0].tau(5.0F);
+  motors[0].kp(7.0F);
+  motors[0].kd(9.0F);
+  motors[1].q(2.0F);
+  motors[1].dq(4.0F);
+  motors[1].tau(6.0F);
+  motors[1].kp(8.0F);
+  motors[1].kd(10.0F);
+  message.motor_cmd(motors);
   return message;
 }
 
@@ -99,10 +133,12 @@ void TestTranslateLowCmdToCommand() {
   assert(translated.command->source_time_ns == 345U);
   assert(translated.command->receive_time_ns == 400U);
   assert(translated.command->mode == ControlMode::kHybrid);
-  assert(translated.command->mode_label == "hybrid");
-  assert(translated.command->degraded);
+  assert(translated.command->joints.position.size() == 35U);
   assert(translated.command->joints.position[0] == 1.0);
   assert(translated.command->joints.position[1] == 2.0);
+  assert(translated.command->joints.effort[0] == 5.0);
+  assert(translated.command->joints.stiffness[0] == 7.0);
+  assert(translated.command->joints.damping[1] == 10.0);
 }
 
 void TestTranslateLowCmdToHardwareCommandThroughJointMap() {
@@ -110,6 +146,7 @@ void TestTranslateLowCmdToHardwareCommandThroughJointMap() {
       translate_lowcmd_to_hardware_command(MakeLowCmd(), 400U, MakeSwappingJointMap());
   assert(translated.result.succeeded());
   assert(translated.command.has_value());
+  assert(translated.command->joints.position.size() == 2U);
   assert(translated.command->joints.position[0] == 2.0);
   assert(translated.command->joints.position[1] == 1.0);
   assert(translated.command->joints.velocity[0] == 4.0);
@@ -121,40 +158,19 @@ void TestTranslateHardwareStateToLowStateThroughJointMap() {
       translate_hardware_state_to_lowstate(MakeHardwareState(), MakeSwappingJointMap());
   assert(translated.result.succeeded());
   assert(translated.state.has_value());
-  assert(translated.state->seq_id() == 20U);
-  assert(translated.state->active_mode() == 2U);
-  assert(translated.state->position()[0] == 22.0);
-  assert(translated.state->position()[1] == 11.0);
-  assert(translated.state->effort()[0] == 66.0);
-  assert(translated.state->effort()[1] == 55.0);
-}
-
-void TestTranslateHardwareStateToBridgeStatus() {
-  const auto translated =
-      translate_hardware_state_to_bridge_status(MakeHardwareState(), MakeSwappingJointMap());
-  assert(translated.result.succeeded());
-  assert(translated.status.has_value());
-  assert(translated.status->seq_id() == 20U);
-  assert(translated.status->control_mode() == 2U);
-  assert(translated.status->fault_present());
-  assert(translated.status->fault_sequence() == 9U);
-  assert(translated.status->fault_message() == "stale command");
+  assert(translated.state->tick() == 20U);
+  assert(translated.state->mode_machine() == 2U);
+  assert(translated.state->motor_state()[0].q() == 22.0F);
+  assert(translated.state->motor_state()[1].q() == 11.0F);
+  assert(translated.state->motor_state()[0].tau_est() == 66.0F);
+  assert(translated.state->motor_state()[1].tau_est() == 55.0F);
 }
 
 void TestRejectsLowCmdWithNonFiniteValues() {
   auto message = MakeLowCmd();
-  message.velocity({1.0, std::nan("")});
-
-  const auto translated = translate_lowcmd_to_command(message, 400U);
-  assert(!translated.result.succeeded());
-  assert(!translated.command.has_value());
-  assert(translated.result.fault.has_value());
-  assert(translated.result.fault->category == bridge::core::FaultCategory::kInvalidCommand);
-}
-
-void TestRejectsLowCmdWithMismatchedVectorWidthsAndFault() {
-  auto message = MakeLowCmd();
-  message.effort({5.0});
+  auto motors = message.motor_cmd();
+  motors[1].dq(std::nan(""));
+  message.motor_cmd(motors);
 
   const auto translated = translate_lowcmd_to_command(message, 400U);
   assert(!translated.result.succeeded());
@@ -180,15 +196,61 @@ void TestRejectsStateWithInvalidImuVectorWidths() {
   assert(!translated.state.has_value());
 }
 
+void TestDisabledJointSlotsRemainZeroInDdsTranslations() {
+  auto message = MakeLowCmd();
+  auto motors = message.motor_cmd();
+  motors[0].q(1.0F);
+  motors[0].dq(2.0F);
+  motors[0].tau(3.0F);
+  motors[0].kp(4.0F);
+  motors[0].kd(5.0F);
+  motors[1].q(9.0F);
+  motors[1].dq(8.0F);
+  motors[1].tau(7.0F);
+  motors[1].kp(6.0F);
+  motors[1].kd(5.0F);
+  motors[2].q(3.0F);
+  motors[2].dq(4.0F);
+  motors[2].tau(5.0F);
+  motors[2].kp(6.0F);
+  motors[2].kd(7.0F);
+  message.motor_cmd(motors);
+
+  const auto command = translate_lowcmd_to_hardware_command(
+      message, 400U, MakeJointMapWithDisabledHighestSlot());
+  assert(command.result.succeeded());
+  assert(command.command.has_value());
+  assert(command.command->joints.position.size() == 3U);
+  assert(command.command->joints.position[2] == 0.0);
+  assert(command.command->joints.velocity[2] == 0.0);
+  assert(command.command->joints.effort[2] == 0.0);
+  assert(command.command->joints.stiffness[2] == 0.0);
+  assert(command.command->joints.damping[2] == 0.0);
+
+  auto state = MakeHardwareState();
+  state.joints.position = {11.0, 999.0, 33.0};
+  state.joints.velocity = {44.0, 999.0, 66.0};
+  state.joints.effort = {77.0, 999.0, 88.0};
+  state.joints.acceleration = {12.0, 999.0, 34.0};
+
+  const auto lowstate =
+      translate_hardware_state_to_lowstate(state, MakeJointMapWithDisabledHighestSlot());
+  assert(lowstate.result.succeeded());
+  assert(lowstate.state.has_value());
+  assert(lowstate.state->motor_state()[2].q() == 0.0F);
+  assert(lowstate.state->motor_state()[2].dq() == 0.0F);
+  assert(lowstate.state->motor_state()[2].tau_est() == 0.0F);
+  assert(lowstate.state->motor_state()[2].ddq() == 0.0F);
 }
+
+}  // namespace
 
 int main() {
   TestTranslateLowCmdToCommand();
   TestTranslateLowCmdToHardwareCommandThroughJointMap();
   TestTranslateHardwareStateToLowStateThroughJointMap();
-  TestTranslateHardwareStateToBridgeStatus();
   TestRejectsLowCmdWithNonFiniteValues();
-  TestRejectsLowCmdWithMismatchedVectorWidthsAndFault();
   TestRejectsStateWithInvalidImuVectorWidths();
+  TestDisabledJointSlotsRemainZeroInDdsTranslations();
   return 0;
 }
