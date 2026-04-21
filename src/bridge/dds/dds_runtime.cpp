@@ -1,155 +1,54 @@
-#include "../../../include/bridge/dds/dds_runtime.hpp"
+#include "dds_runtime_internal.hpp"
 
-#include <fastdds/dds/domain/DomainParticipantFactory.hpp>
+#include <utility>
 
-#include "../../../idl/bridge/BridgeMessagesPubSubTypes.hpp"
+#include "unitree/robot/channel/channel_factory.hpp"
 
 namespace bridge::dds {
-namespace {
 
-template <typename T, typename Deleter>
-[[nodiscard]] std::shared_ptr<T> share_participant_child(
-    T* child,
-    eprosima::fastdds::dds::DomainParticipant* participant,
-    Deleter deleter) {
-  if (child == nullptr) {
-    return nullptr;
-  }
-  return std::shared_ptr<T>(child, [participant, deleter](T* ptr) {
-    if (participant != nullptr && ptr != nullptr) {
-      deleter(participant, ptr);
-    }
-  });
+DdsRuntime::DdsRuntime() : impl_(std::make_unique<DdsRuntimeImpl>()) {}
+
+DdsRuntime::~DdsRuntime() = default;
+
+DdsRuntime::DdsRuntime(DdsRuntime&&) noexcept = default;
+
+DdsRuntime& DdsRuntime::operator=(DdsRuntime&&) noexcept = default;
+
+bool DdsRuntime::ready() const noexcept {
+  return impl_ && impl_->initialized;
 }
 
-template <typename T, typename Deleter>
-[[nodiscard]] std::shared_ptr<T> share_publisher_child(
-    T* child,
-    eprosima::fastdds::dds::Publisher* publisher,
-    Deleter deleter) {
-  if (child == nullptr) {
-    return nullptr;
-  }
-  return std::shared_ptr<T>(child, [publisher, deleter](T* ptr) {
-    if (publisher != nullptr && ptr != nullptr) {
-      deleter(publisher, ptr);
-    }
-  });
+bool DdsRuntime::has_command_reader() const noexcept {
+  return impl_ && impl_->initialized && impl_->command_channel_available;
 }
 
-template <typename T, typename Deleter>
-[[nodiscard]] std::shared_ptr<T> share_subscriber_child(
-    T* child,
-    eprosima::fastdds::dds::Subscriber* subscriber,
-    Deleter deleter) {
-  if (child == nullptr) {
-    return nullptr;
-  }
-  return std::shared_ptr<T>(child, [subscriber, deleter](T* ptr) {
-    if (subscriber != nullptr && ptr != nullptr) {
-      deleter(subscriber, ptr);
-    }
-  });
+bool DdsRuntime::has_state_writer() const noexcept {
+  return impl_ && impl_->initialized && impl_->state_channel_available;
 }
 
+bool DdsRuntime::has_status_writer() const noexcept {
+  return false;
+}
+
+DdsRuntimeImpl& runtime_impl(DdsRuntime& runtime) noexcept {
+  return *runtime.impl_;
+}
+
+const DdsRuntimeImpl& runtime_impl(const DdsRuntime& runtime) noexcept {
+  return *runtime.impl_;
 }
 
 std::shared_ptr<DdsRuntime> make_dds_runtime(DdsRuntimeConfig config) {
-  using namespace eprosima::fastdds::dds;
-
   auto runtime = std::make_shared<DdsRuntime>();
   runtime->config = std::move(config);
-  DomainParticipantQos participant_qos;
-  participant_qos.name("bridge_dds_runtime_participant");
+  DdsRuntimeImpl& impl = runtime_impl(*runtime);
 
-  runtime->participant = std::shared_ptr<DomainParticipant>(
-      DomainParticipantFactory::get_instance()->create_participant(
-          runtime->config.domain_id, participant_qos),
-      [](DomainParticipant* participant) {
-        if (participant != nullptr) {
-          DomainParticipantFactory::get_instance()->delete_participant(participant);
-        }
-      });
-
-  if (runtime->participant == nullptr) {
-    return runtime;
-  }
-
-  runtime->command_type = TypeSupport(new bridge_wire::LowCmdPubSubType());
-  runtime->state_type = TypeSupport(new bridge_wire::LowStatePubSubType());
-  runtime->status_type = TypeSupport(new bridge_wire::BridgeStatusPubSubType());
-
-  runtime->command_type.register_type(runtime->participant.get());
-  runtime->state_type.register_type(runtime->participant.get());
-  runtime->status_type.register_type(runtime->participant.get());
-
-  runtime->publisher = share_participant_child(
-      runtime->participant->create_publisher(PUBLISHER_QOS_DEFAULT, nullptr),
-      runtime->participant.get(),
-      [](DomainParticipant* participant, Publisher* publisher) {
-        participant->delete_publisher(publisher);
-      });
-  runtime->subscriber = share_participant_child(
-      runtime->participant->create_subscriber(SUBSCRIBER_QOS_DEFAULT, nullptr),
-      runtime->participant.get(),
-      [](DomainParticipant* participant, Subscriber* subscriber) {
-        participant->delete_subscriber(subscriber);
-      });
-
-  runtime->command_topic = share_participant_child(
-      runtime->participant->create_topic(
-          runtime->config.command_topic, runtime->command_type.get_type_name(),
-          TOPIC_QOS_DEFAULT),
-      runtime->participant.get(),
-      [](DomainParticipant* participant, Topic* topic) {
-        participant->delete_topic(topic);
-      });
-  runtime->state_topic = share_participant_child(
-      runtime->participant->create_topic(
-          runtime->config.state_topic, runtime->state_type.get_type_name(),
-          TOPIC_QOS_DEFAULT),
-      runtime->participant.get(),
-      [](DomainParticipant* participant, Topic* topic) {
-        participant->delete_topic(topic);
-      });
-  runtime->status_topic = share_participant_child(
-      runtime->participant->create_topic(
-          runtime->config.status_topic, runtime->status_type.get_type_name(),
-          TOPIC_QOS_DEFAULT),
-      runtime->participant.get(),
-      [](DomainParticipant* participant, Topic* topic) {
-        participant->delete_topic(topic);
-      });
-
-  if (runtime->subscriber && runtime->command_topic) {
-    runtime->command_reader = share_subscriber_child(
-        runtime->subscriber->create_datareader(
-            runtime->command_topic.get(), DATAREADER_QOS_DEFAULT, nullptr),
-        runtime->subscriber.get(),
-        [](Subscriber* subscriber, DataReader* reader) {
-          subscriber->delete_datareader(reader);
-        });
-  }
-  if (runtime->publisher && runtime->state_topic) {
-    runtime->state_writer = share_publisher_child(
-        runtime->publisher->create_datawriter(
-            runtime->state_topic.get(), DATAWRITER_QOS_DEFAULT, nullptr),
-        runtime->publisher.get(),
-        [](Publisher* publisher, DataWriter* writer) {
-          publisher->delete_datawriter(writer);
-        });
-  }
-  if (runtime->publisher && runtime->status_topic) {
-    runtime->status_writer = share_publisher_child(
-        runtime->publisher->create_datawriter(
-            runtime->status_topic.get(), DATAWRITER_QOS_DEFAULT, nullptr),
-        runtime->publisher.get(),
-        [](Publisher* publisher, DataWriter* writer) {
-          publisher->delete_datawriter(writer);
-        });
-  }
-
+  unitree::robot::ChannelFactory::Instance()->Init(
+      static_cast<int32_t>(runtime->config.domain_id));
+  impl.initialized = true;
+  impl.command_channel_available = true;
+  impl.state_channel_available = true;
   return runtime;
 }
 
-}
+}  // namespace bridge::dds

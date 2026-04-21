@@ -4,7 +4,7 @@
 #include <memory>
 #include <string_view>
 
-#include <fastdds/dds/subscriber/DataReaderListener.hpp>
+#include "unitree/idl/hg/LowCmd_.hpp"
 
 #include "dds_runtime.hpp"
 #include "dds_translation.hpp"
@@ -18,8 +18,7 @@ struct DdsCommandIngressDependencies {
   config::JointMap joint_map;
 };
 
-class DdsCommandIngress final : public core::BridgeCommandIngress,
-                                public eprosima::fastdds::dds::DataReaderListener {
+class DdsCommandIngress final : public core::BridgeCommandIngress {
  public:
   explicit DdsCommandIngress(DdsCommandIngressDependencies dependencies);
   ~DdsCommandIngress() override;
@@ -36,15 +35,16 @@ class DdsCommandIngress final : public core::BridgeCommandIngress,
 
   core::RunnerCallResult stop() override;
 
-  void on_data_available(eprosima::fastdds::dds::DataReader* reader) override;
-
  private:
-  void handle_command(const bridge_wire::LowCmd& message,
+  class Impl;
+
+  void handle_command(const unitree_hg::msg::dds_::LowCmd_& message,
                       std::uint64_t receive_time_ns);
 
   DdsCommandIngressDependencies dependencies_;
   core::BridgeCommandSink* command_sink_{nullptr};
   core::BridgeRuntimeEventSink* event_sink_{nullptr};
+  std::unique_ptr<Impl> impl_;
 };
 
 }

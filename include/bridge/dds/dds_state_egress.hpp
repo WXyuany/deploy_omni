@@ -34,7 +34,10 @@ class DdsStateEgress final : public core::BridgeStateEgress {
   core::RunnerCallResult stop() override;
 
  private:
+  class Impl;
+
   DdsStateEgressDependencies dependencies_;
+  std::unique_ptr<Impl> impl_;
 };
 
 }

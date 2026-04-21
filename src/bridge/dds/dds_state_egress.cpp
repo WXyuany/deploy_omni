@@ -1,10 +1,11 @@
 #include "../../../include/bridge/dds/dds_state_egress.hpp"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
-#include <fastdds/dds/publisher/DataWriter.hpp>
+#include "unitree/robot/channel/channel_publisher.hpp"
 
 namespace bridge::dds {
 namespace {
@@ -27,10 +28,35 @@ namespace {
   };
 }
 
-}
+}  // namespace
+
+class DdsStateEgress::Impl final {
+ public:
+  using Publisher = unitree::robot::ChannelPublisher<unitree_hg::msg::dds_::LowState_>;
+
+  bool start(const std::string& topic_name) {
+    publisher_ = std::make_unique<Publisher>(topic_name);
+    publisher_->InitChannel();
+    return true;
+  }
+
+  bool publish(const unitree_hg::msg::dds_::LowState_& state) {
+    return publisher_ && publisher_->Write(state);
+  }
+
+  void stop() {
+    if (publisher_) {
+      publisher_->CloseChannel();
+      publisher_.reset();
+    }
+  }
+
+ private:
+  std::unique_ptr<Publisher> publisher_;
+};
 
 DdsStateEgress::DdsStateEgress(DdsStateEgressDependencies dependencies)
-    : dependencies_(std::move(dependencies)) {}
+    : dependencies_(std::move(dependencies)), impl_(std::make_unique<Impl>()) {}
 
 DdsStateEgress::~DdsStateEgress() = default;
 
@@ -39,15 +65,15 @@ std::string_view DdsStateEgress::name() const noexcept {
 }
 
 core::RunnerCallResult DdsStateEgress::start() {
-  if (!dependencies_.runtime || !dependencies_.runtime->state_writer ||
-      !dependencies_.runtime->status_writer) {
-    return fatal_result("dds state egress requires runtime state/status writers");
+  if (!dependencies_.runtime || !dependencies_.runtime->has_state_writer()) {
+    return fatal_result("dds state egress requires initialized runtime");
   }
-  return {
-      .status = core::RunnerCallStatus::kOk,
-      .detail = "dds state egress started",
-      .fault = std::nullopt,
-  };
+  if (!impl_->start(dependencies_.runtime->config.state_topic)) {
+    return fatal_result("failed to start cyclone state publisher");
+  }
+  return {.status = core::RunnerCallStatus::kOk,
+          .detail = "dds state egress started",
+          .fault = std::nullopt};
 }
 
 core::RunnerCallResult DdsStateEgress::publish(const core::StateFrame& state) {
@@ -56,37 +82,19 @@ core::RunnerCallResult DdsStateEgress::publish(const core::StateFrame& state) {
   if (!lowstate.result.succeeded()) {
     return rejected_result(lowstate.result.detail, lowstate.result.fault);
   }
-
-  const StatusTranslation status =
-      translate_hardware_state_to_bridge_status(state, dependencies_.joint_map);
-  if (!status.result.succeeded()) {
-    return rejected_result(status.result.detail, status.result.fault);
+  if (!impl_->publish(*lowstate.state)) {
+    return fatal_result("failed to publish cyclone lowstate sample");
   }
-
-  if (dependencies_.runtime->state_writer->write(
-          const_cast<bridge_wire::LowState*>(&*lowstate.state)) !=
-      eprosima::fastdds::dds::RETCODE_OK) {
-    return fatal_result("failed to publish bridge/state sample");
-  }
-  if (dependencies_.runtime->status_writer->write(
-          const_cast<bridge_wire::BridgeStatus*>(&*status.status)) !=
-      eprosima::fastdds::dds::RETCODE_OK) {
-    return fatal_result("failed to publish bridge/status sample");
-  }
-
-  return {
-      .status = core::RunnerCallStatus::kOk,
-      .detail = "dds state/status published",
-      .fault = std::nullopt,
-  };
+  return {.status = core::RunnerCallStatus::kOk,
+          .detail = "dds lowstate published",
+          .fault = std::nullopt};
 }
 
 core::RunnerCallResult DdsStateEgress::stop() {
-  return {
-      .status = core::RunnerCallStatus::kOk,
-      .detail = "dds state egress stopped",
-      .fault = std::nullopt,
-  };
+  impl_->stop();
+  return {.status = core::RunnerCallStatus::kOk,
+          .detail = "dds state egress stopped",
+          .fault = std::nullopt};
 }
 
-}
+}  // namespace bridge::dds

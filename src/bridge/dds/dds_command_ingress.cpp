@@ -1,12 +1,12 @@
 #include "../../../include/bridge/dds/dds_command_ingress.hpp"
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
-#include <fastdds/dds/subscriber/DataReader.hpp>
-#include <fastdds/dds/subscriber/SampleInfo.hpp>
+#include "unitree/robot/channel/channel_subscriber.hpp"
 
 namespace bridge::dds {
 namespace {
@@ -26,10 +26,42 @@ namespace {
   };
 }
 
-}
+}  // namespace
+
+class DdsCommandIngress::Impl final {
+ public:
+  using Subscriber = unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowCmd_>;
+
+  explicit Impl(DdsCommandIngress& owner) : owner_(owner) {}
+
+  bool start(const std::string& topic_name) {
+    subscriber_ = std::make_unique<Subscriber>(topic_name);
+    subscriber_->InitChannel(
+        [this](const void* message) {
+          if (message == nullptr) {
+            return;
+          }
+          owner_.handle_command(
+              *static_cast<const unitree_hg::msg::dds_::LowCmd_*>(message), now_ns());
+        },
+        10);
+    return true;
+  }
+
+  void stop() {
+    if (subscriber_) {
+      subscriber_->CloseChannel();
+      subscriber_.reset();
+    }
+  }
+
+ private:
+  DdsCommandIngress& owner_;
+  std::unique_ptr<Subscriber> subscriber_;
+};
 
 DdsCommandIngress::DdsCommandIngress(DdsCommandIngressDependencies dependencies)
-    : dependencies_(std::move(dependencies)) {}
+    : dependencies_(std::move(dependencies)), impl_(std::make_unique<Impl>(*this)) {}
 
 DdsCommandIngress::~DdsCommandIngress() = default;
 
@@ -42,47 +74,25 @@ core::RunnerCallResult DdsCommandIngress::start(
     core::BridgeRuntimeEventSink& event_sink) {
   command_sink_ = &command_sink;
   event_sink_ = &event_sink;
-  if (!dependencies_.runtime || !dependencies_.runtime->command_reader) {
-    return fatal_result("dds command ingress requires runtime command reader");
+  if (!dependencies_.runtime || !dependencies_.runtime->has_command_reader()) {
+    return fatal_result("dds command ingress requires initialized runtime");
   }
-  const auto code = dependencies_.runtime->command_reader->set_listener(this);
-  if (code != eprosima::fastdds::dds::RETCODE_OK) {
-    return fatal_result("failed to attach dds command reader listener");
+  if (!impl_->start(dependencies_.runtime->config.command_topic)) {
+    return fatal_result("failed to start cyclone command subscriber");
   }
-  return {
-      .status = core::RunnerCallStatus::kOk,
-      .detail = "dds command ingress started",
-      .fault = std::nullopt,
-  };
+  return {.status = core::RunnerCallStatus::kOk,
+          .detail = "dds command ingress started",
+          .fault = std::nullopt};
 }
 
 core::RunnerCallResult DdsCommandIngress::stop() {
-  if (dependencies_.runtime && dependencies_.runtime->command_reader) {
-    dependencies_.runtime->command_reader->set_listener(nullptr);
-  }
-  return {
-      .status = core::RunnerCallStatus::kOk,
-      .detail = "dds command ingress stopped",
-      .fault = std::nullopt,
-  };
+  impl_->stop();
+  return {.status = core::RunnerCallStatus::kOk,
+          .detail = "dds command ingress stopped",
+          .fault = std::nullopt};
 }
 
-void DdsCommandIngress::on_data_available(eprosima::fastdds::dds::DataReader* reader) {
-  if (reader == nullptr) {
-    return;
-  }
-
-  bridge_wire::LowCmd message;
-  eprosima::fastdds::dds::SampleInfo info;
-  while (reader->take_next_sample(&message, &info) == eprosima::fastdds::dds::RETCODE_OK) {
-    if (!info.valid_data) {
-      continue;
-    }
-    handle_command(message, now_ns());
-  }
-}
-
-void DdsCommandIngress::handle_command(const bridge_wire::LowCmd& message,
+void DdsCommandIngress::handle_command(const unitree_hg::msg::dds_::LowCmd_& message,
                                        const std::uint64_t receive_time_ns) {
   if (command_sink_ == nullptr) {
     return;
@@ -102,4 +112,4 @@ void DdsCommandIngress::handle_command(const bridge_wire::LowCmd& message,
       command_sink_->submit_latest_command(*translated.command);
 }
 
-}
+}  // namespace bridge::dds
