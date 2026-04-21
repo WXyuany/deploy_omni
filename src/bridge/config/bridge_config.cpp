@@ -95,6 +95,34 @@ struct RawBridgeConfig {
   std::vector<JointMapEntry> joint_map_entries;
 };
 
+[[nodiscard]] std::size_t configured_hardware_width(
+    const std::vector<JointMapEntry>& entries) {
+  std::size_t width = 0;
+  for (const JointMapEntry& entry : entries) {
+    width = std::max(width, entry.hardware_index + 1);
+  }
+  return width;
+}
+
+[[nodiscard]] std::size_t configured_sim_width(
+    const std::vector<JointMapEntry>& entries) {
+  std::size_t width = 0;
+  for (const JointMapEntry& entry : entries) {
+    width = std::max(width, entry.sim_index + 1);
+  }
+  return width;
+}
+
+void apply_default_joint_transform(JointMapEntry* entry, const double sign,
+                                   const double offset) {
+  entry->transforms.position = {.sign = sign, .offset = offset};
+  entry->transforms.velocity = {.sign = sign, .offset = 0.0};
+  entry->transforms.effort = {.sign = sign, .offset = 0.0};
+  entry->transforms.stiffness = {.sign = 1.0, .offset = 0.0};
+  entry->transforms.damping = {.sign = 1.0, .offset = 0.0};
+  entry->transforms.acceleration = {.sign = sign, .offset = 0.0};
+}
+
 [[nodiscard]] std::string trim(std::string value) {
   const auto not_space = [](const unsigned char character) {
     return !std::isspace(character);
@@ -406,6 +434,24 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
                              BridgeConfigIssueCode::kInvalidValue);
         continue;
       }
+      if (key_value.has_value() && key_value->first == "robot_kind") {
+        raw->adapter_kind = key_value->second;
+        if (!raw->robot_name.has_value()) {
+          raw->robot_name = key_value->second;
+        }
+        continue;
+      }
+      if (key_value.has_value() && key_value->first == "loop_rate_hz") {
+        assign_required<int>(&raw->loop_rate_hz, "loop_rate_hz", key_value->second,
+                             issues, BridgeConfigIssueCode::kInvalidValue);
+        continue;
+      }
+      if (key_value.has_value() && key_value->first == "stale_command_timeout_ms") {
+        assign_required<int>(&raw->stale_command_timeout_ms,
+                             "stale_command_timeout_ms", key_value->second, issues,
+                             BridgeConfigIssueCode::kInvalidValue);
+        continue;
+      }
 
       push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                  "unsupported top-level config line: " + line.text);
@@ -517,6 +563,12 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           assign_required<int>(&raw->dds_domain_id, "dds.domain_id",
                                key_value->second, issues,
                                BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "command") {
+          raw->dds_command_topic = key_value->second;
+        } else if (key_value->first == "state") {
+          raw->dds_state_topic = key_value->second;
+        } else if (key_value->first == "status") {
+          raw->dds_status_topic = key_value->second;
         }
         continue;
       }
@@ -642,6 +694,26 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     }
 
     if (top == TopSection::kJointMapping) {
+      if (line.indent == 2 && starts_with(line.text, "- ")) {
+        joint_mapping_subsection = JointMappingSubsection::kEntries;
+        raw->joint_map_entries.emplace_back();
+        current_entry = &raw->joint_map_entries.back();
+        entry_subsection = EntrySubsection::kNone;
+        current_entry->enabled = true;
+        const auto key_value = split_key_value(trim(line.text.substr(2)));
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid simplified joint_mapping entry line: " + line.text);
+          continue;
+        }
+        if (key_value->first == "name") {
+          current_entry->sim_name = key_value->second;
+          current_entry->hardware_name = key_value->second;
+          current_entry->label = key_value->second;
+        }
+        continue;
+      }
+
       if (line.indent == 2) {
         entry_subsection = EntrySubsection::kNone;
         current_entry = nullptr;
@@ -824,6 +896,59 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           }
         }
       }
+
+      if (joint_mapping_subsection == JointMappingSubsection::kEntries &&
+          current_entry != nullptr && line.indent == 4) {
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid simplified joint_mapping field: " + line.text);
+          continue;
+        }
+
+        if (key_value->first == "name") {
+          current_entry->sim_name = key_value->second;
+          current_entry->hardware_name = key_value->second;
+          current_entry->label = key_value->second;
+        } else if (key_value->first == "index") {
+          const std::optional<int> value = parse_int(key_value->second);
+          if (!value.has_value() || *value < 0) {
+            push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                       "joint_mapping.index must be a non-negative integer");
+          } else {
+            current_entry->sim_index = static_cast<std::size_t>(*value);
+            current_entry->hardware_index = static_cast<std::size_t>(*value);
+          }
+        } else if (key_value->first == "sign") {
+          const std::optional<double> sign = parse_double(key_value->second);
+          if (!sign.has_value()) {
+            push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                       "joint_mapping.sign must be a numeric value");
+          } else {
+            apply_default_joint_transform(current_entry, *sign,
+                                          current_entry->transforms.position.offset);
+          }
+        } else if (key_value->first == "offset") {
+          const std::optional<double> offset = parse_double(key_value->second);
+          if (!offset.has_value()) {
+            push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                       "joint_mapping.offset must be a numeric value");
+          } else {
+            apply_default_joint_transform(current_entry,
+                                          current_entry->transforms.position.sign,
+                                          *offset);
+          }
+        } else if (key_value->first == "enable") {
+          const std::optional<bool> value = parse_bool(key_value->second);
+          if (!value.has_value()) {
+            push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                       "joint_mapping.enable must be true or false");
+          } else {
+            current_entry->enabled = *value;
+          }
+        }
+        continue;
+      }
     }
   }
 
@@ -859,17 +984,20 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
 [[nodiscard]] std::optional<BridgeStartupConfig> finalize_config(
     const RawBridgeConfig& raw, const std::string& file_path,
     std::vector<BridgeConfigIssue>* issues) {
-  if (!raw.schema_version.has_value()) {
+  const bool simplified_config = !raw.schema_version.has_value();
+
+  if (!raw.schema_version.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "schema_version is required");
-  } else if (*raw.schema_version != 1) {
+  } else if (raw.schema_version.has_value() && *raw.schema_version != 1) {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "schema_version must be 1");
   }
 
   if (!raw.robot_name.has_value() || raw.robot_name->empty()) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "bridge.robot_name is required");
+               simplified_config ? "robot_kind is required"
+                                 : "bridge.robot_name is required");
   }
   if (!raw.loop_rate_hz.has_value()) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
@@ -879,31 +1007,31 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.stale_command_timeout_ms is required");
   }
-  if (!raw.startup_idle_mode.has_value()) {
+  if (!raw.startup_idle_mode.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.startup_idle_policy.mode is required");
   }
-  if (!raw.require_first_valid_command.has_value()) {
+  if (!raw.require_first_valid_command.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.startup_idle_policy.require_first_valid_command is required");
   }
-  if (!raw.use_adapter_safe_command.has_value()) {
+  if (!raw.use_adapter_safe_command.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.startup_idle_policy.use_adapter_safe_command is required");
   }
-  if (!raw.fault_mode.has_value()) {
+  if (!raw.fault_mode.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.fault_policy.mode is required");
   }
-  if (!raw.send_safe_command_on_fault.has_value()) {
+  if (!raw.send_safe_command_on_fault.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.fault_policy.send_safe_command_on_fault is required");
   }
-  if (!raw.publish_degraded_state_while_faulted.has_value()) {
+  if (!raw.publish_degraded_state_while_faulted.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.fault_policy.publish_degraded_state_while_faulted is required");
   }
-  if (!raw.halt_command_writes_while_faulted.has_value()) {
+  if (!raw.halt_command_writes_while_faulted.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.fault_policy.halt_command_writes_while_faulted is required");
   }
@@ -911,11 +1039,12 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.kind is required");
   }
-  if (!raw.command_mode.has_value() || raw.command_mode->empty()) {
+  if ((!raw.command_mode.has_value() || raw.command_mode->empty()) &&
+      !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.command_mode is required");
   }
-  if (!raw.dds_domain_id.has_value()) {
+  if (!raw.dds_domain_id.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "dds.domain_id is required");
   }
@@ -927,32 +1056,31 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "dds.topics.state.name is required");
   }
-  if (!raw.dds_status_topic.has_value() || raw.dds_status_topic->empty()) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "dds.topics.status.name is required");
-  }
-  if (!raw.connection_transport.has_value() || raw.connection_transport->empty()) {
+  if ((!raw.connection_transport.has_value() || raw.connection_transport->empty()) &&
+      !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.connection.transport is required");
   }
-  if (!raw.connection_interface_hint.has_value() ||
-      raw.connection_interface_hint->empty()) {
+  if ((!raw.connection_interface_hint.has_value() ||
+       raw.connection_interface_hint->empty()) &&
+      !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.connection.interface_hint is required");
   }
-  if (!raw.read_initial_state_timeout_ms.has_value()) {
+  if (!raw.read_initial_state_timeout_ms.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.startup.read_initial_state_timeout_ms is required");
   }
-  if (!raw.require_healthy_hardware.has_value()) {
+  if (!raw.require_healthy_hardware.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.startup.require_healthy_hardware is required");
   }
-  if (!raw.safe_command_profile.has_value() || raw.safe_command_profile->empty()) {
+  if ((!raw.safe_command_profile.has_value() || raw.safe_command_profile->empty()) &&
+      !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.safety.safe_command_profile is required");
   }
-  if (!raw.allow_safe_command_during_shutdown.has_value()) {
+  if (!raw.allow_safe_command_during_shutdown.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.safety.allow_safe_command_during_shutdown is required");
   }
@@ -965,19 +1093,51 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     return std::nullopt;
   }
 
-  if (*raw.startup_idle_mode != "zero_torque") {
+  const std::string adapter_kind = *raw.adapter_kind;
+  const std::string robot_name = raw.robot_name.value_or(adapter_kind);
+  const std::string command_mode = raw.command_mode.value_or(
+      adapter_kind == "pm01" ? "joint_bridge" : "torque_pd_passthrough");
+  const int dds_domain_id = raw.dds_domain_id.value_or(0);
+  const std::string dds_status_topic = raw.dds_status_topic.value_or("");
+  const std::string connection_transport =
+      raw.connection_transport.value_or(adapter_kind == "pm01" ? "dds" : "udp");
+  const std::string connection_interface_hint = raw.connection_interface_hint.value_or(
+      adapter_kind == "pm01" ? "pm01" : "robot_lan0");
+  const int read_initial_state_timeout_ms =
+      raw.read_initial_state_timeout_ms.value_or(1000);
+  const bool require_healthy_hardware =
+      raw.require_healthy_hardware.value_or(true);
+  const std::string safe_command_profile =
+      raw.safe_command_profile.value_or("zero_torque");
+  const bool allow_safe_command_during_shutdown =
+      raw.allow_safe_command_during_shutdown.value_or(true);
+  const std::string startup_idle_mode =
+      raw.startup_idle_mode.value_or("zero_torque");
+  const bool require_first_valid_command =
+      raw.require_first_valid_command.value_or(true);
+  const bool use_adapter_safe_command =
+      raw.use_adapter_safe_command.value_or(true);
+  const std::string fault_mode = raw.fault_mode.value_or("fail_stop");
+  const bool send_safe_command_on_fault =
+      raw.send_safe_command_on_fault.value_or(true);
+  const bool publish_degraded_state_while_faulted =
+      raw.publish_degraded_state_while_faulted.value_or(true);
+  const bool halt_command_writes_while_faulted =
+      raw.halt_command_writes_while_faulted.value_or(true);
+
+  if (startup_idle_mode != "zero_torque") {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "bridge.startup_idle_policy.mode must be zero_torque");
   }
-  if (*raw.fault_mode != "fail_stop") {
+  if (fault_mode != "fail_stop") {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "bridge.fault_policy.mode must be fail_stop");
   }
-  if (!*raw.require_first_valid_command) {
+  if (!require_first_valid_command) {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "bridge.startup_idle_policy.require_first_valid_command must be true");
   }
-  if (!*raw.halt_command_writes_while_faulted) {
+  if (!halt_command_writes_while_faulted) {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "bridge.fault_policy.halt_command_writes_while_faulted must be true");
   }
@@ -994,12 +1154,12 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
                "bridge.stale_command_timeout_ms must be non-negative");
   }
   const std::optional<std::uint64_t> initialize_timeout_ns =
-      ms_to_ns(*raw.read_initial_state_timeout_ms);
+      ms_to_ns(read_initial_state_timeout_ms);
   if (!initialize_timeout_ns.has_value()) {
     push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
                "adapter.startup.read_initial_state_timeout_ms must be non-negative");
   }
-  if (*raw.dds_domain_id < 0) {
+  if (dds_domain_id < 0) {
     push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
                "dds.domain_id must be non-negative");
   }
@@ -1008,7 +1168,24 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     return std::nullopt;
   }
 
-  std::vector<std::string> joint_names(enabled_hardware_width(raw.joint_map_entries));
+  JointMapValidationOptions joint_map_validation = raw.joint_map_validation;
+  if (simplified_config) {
+    joint_map_validation.require_dense_enabled_sim_indexes = false;
+    joint_map_validation.require_dense_enabled_hardware_indexes = false;
+    joint_map_validation.require_unique_enabled_sim_names = true;
+    joint_map_validation.require_unique_enabled_hardware_names = true;
+    if (!joint_map_validation.expected_sim_joint_count.has_value()) {
+      joint_map_validation.expected_sim_joint_count =
+          configured_sim_width(raw.joint_map_entries);
+    }
+    if (!joint_map_validation.expected_hardware_joint_count.has_value()) {
+      joint_map_validation.expected_hardware_joint_count =
+          configured_hardware_width(raw.joint_map_entries);
+    }
+  }
+
+  std::vector<std::pair<std::size_t, std::string>> enabled_joint_names;
+  enabled_joint_names.reserve(raw.joint_map_entries.size());
   for (const JointMapEntry& entry : raw.joint_map_entries) {
     if (!entry.enabled) {
       continue;
@@ -1018,24 +1195,22 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
                  "each enabled joint_mapping entry must define hardware_name");
       continue;
     }
-    if (entry.hardware_index >= joint_names.size()) {
-      push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
-                 "joint_mapping entry hardware_index exceeds entry count");
-      continue;
-    }
-    joint_names[entry.hardware_index] = *entry.hardware_name;
+    enabled_joint_names.emplace_back(entry.hardware_index, *entry.hardware_name);
   }
 
-  for (std::size_t index = 0; index < joint_names.size(); ++index) {
-    if (joint_names[index].empty()) {
-      push_issue(issues, BridgeConfigIssueCode::kMissingField,
-                 "joint_mapping entry missing hardware_name for hardware index " +
-                     std::to_string(index));
-    }
+  std::sort(enabled_joint_names.begin(), enabled_joint_names.end(),
+            [](const auto& left, const auto& right) {
+              return left.first < right.first;
+            });
+
+  std::vector<std::string> joint_names;
+  joint_names.reserve(enabled_joint_names.size());
+  for (const auto& [_, joint_name] : enabled_joint_names) {
+    joint_names.push_back(joint_name);
   }
 
   const JointMapBuildResult joint_map =
-      JointMap::build(raw.joint_map_entries, raw.joint_map_validation);
+      JointMap::build(raw.joint_map_entries, joint_map_validation);
   if (!joint_map.succeeded()) {
     for (const JointMapIssue& issue : joint_map.validation.issues) {
       push_issue(issues, BridgeConfigIssueCode::kJointMapInvalid, issue.message);
@@ -1048,39 +1223,38 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
 
   BridgeStartupConfig config;
   config.source_path = file_path;
-  config.robot_type = *raw.adapter_kind;
+  config.robot_type = adapter_kind;
   config.runner.loop_period_ns = *loop_period_ns;
   config.runner.command_stale_timeout_ns = *stale_timeout_ns;
-  config.dds.domain_id = static_cast<std::uint32_t>(*raw.dds_domain_id);
+  config.dds.domain_id = static_cast<std::uint32_t>(dds_domain_id);
   config.dds.topics.command = *raw.dds_command_topic;
   config.dds.topics.state = *raw.dds_state_topic;
-  config.dds.topics.status = *raw.dds_status_topic;
+  config.dds.topics.status = dds_status_topic;
   config.runner.startup_idle_policy =
-      *raw.use_adapter_safe_command ? core::StartupIdlePolicy::kPreferSafeCommand
-                                    : core::StartupIdlePolicy::kNoCommandWrite;
+      use_adapter_safe_command ? core::StartupIdlePolicy::kPreferSafeCommand
+                               : core::StartupIdlePolicy::kNoCommandWrite;
   config.runner.fault_policy.fail_stop_on_transport_fault = true;
   config.runner.fault_policy.fail_stop_on_command_stale = true;
   config.runner.fault_policy.fail_stop_on_adapter_degraded = false;
   config.runner.fault_policy.write_safe_command_on_fault =
-      *raw.send_safe_command_on_fault;
+      send_safe_command_on_fault;
   config.runner.fault_policy.continue_publishing_in_fault =
-      *raw.publish_degraded_state_while_faulted;
+      publish_degraded_state_while_faulted;
 
-  config.adapter.kind = *raw.adapter_kind;
-  config.adapter.robot_name = *raw.robot_name;
+  config.adapter.kind = adapter_kind;
+  config.adapter.robot_name = robot_name;
   config.adapter.robot_model = raw.robot_model.value_or("");
-  config.adapter.command_mode = *raw.command_mode;
-  config.adapter.connection.transport = *raw.connection_transport;
-  config.adapter.connection.interface_hint = *raw.connection_interface_hint;
+  config.adapter.command_mode = command_mode;
+  config.adapter.connection.transport = connection_transport;
+  config.adapter.connection.interface_hint = connection_interface_hint;
   config.adapter.startup.read_initial_state_timeout_ns = *initialize_timeout_ns;
-  config.adapter.startup.require_healthy_hardware =
-      *raw.require_healthy_hardware;
-  config.adapter.safety.safe_command_profile = *raw.safe_command_profile;
+  config.adapter.startup.require_healthy_hardware = require_healthy_hardware;
+  config.adapter.safety.safe_command_profile = safe_command_profile;
   config.adapter.safety.allow_safe_command_during_shutdown =
-      *raw.allow_safe_command_during_shutdown;
+      allow_safe_command_during_shutdown;
   config.adapter.joint_names = std::move(joint_names);
 
-  config.joint_map_validation = raw.joint_map_validation;
+  config.joint_map_validation = joint_map_validation;
   config.joint_map_entries = raw.joint_map_entries;
   return config;
 }

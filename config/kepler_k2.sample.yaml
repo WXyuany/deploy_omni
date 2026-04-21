@@ -2,7 +2,7 @@ schema_version: 1
 
 bridge:
   robot_name: kepler_k2
-  loop_rate_hz: 250
+  loop_rate_hz: 1000
   stale_command_timeout_ms: 120
   startup_idle_policy:
     mode: zero_torque
@@ -18,11 +18,9 @@ dds:
   domain_id: 0
   topics:
     command:
-      name: kepler_k2/low_level_command
+      name: rt/lowcmd
     state:
-      name: kepler_k2/low_level_state
-    status:
-      name: kepler_k2/bridge_status
+      name: rt/lowstate
 
 adapter:
   kind: kepler_k2

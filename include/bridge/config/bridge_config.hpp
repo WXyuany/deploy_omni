@@ -68,9 +68,9 @@ struct DdsTopicNames {
 struct DdsConfig {
   std::uint32_t domain_id{0};
   DdsTopicNames topics{
-      .command = "bridge/command",
-      .state = "bridge/state",
-      .status = "bridge/status",
+      .command = "rt/lowcmd",
+      .state = "rt/lowstate",
+      .status = "",
   };
 };
 

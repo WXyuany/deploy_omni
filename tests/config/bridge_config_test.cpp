@@ -1,6 +1,7 @@
 #include <cassert>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "../../include/bridge/config/bridge_config.hpp"
 
@@ -22,6 +23,86 @@ bool HasIssueCode(const bridge::config::BridgeConfigLoadResult& result,
   return false;
 }
 
+std::string WritePm01Config(const std::string& path) {
+  static const std::vector<std::string> kJointNames{
+      "l_hip_yaw",       "l_hip_roll",      "l_hip_pitch",
+      "l_knee",          "l_ankle_pitch",   "l_ankle_roll",
+      "r_hip_yaw",       "r_hip_roll",      "r_hip_pitch",
+      "r_knee",          "r_ankle_pitch",   "r_ankle_roll",
+      "waist_yaw",       "waist_pitch",     "waist_roll",
+      "l_shoulder_pitch", "l_shoulder_roll", "l_shoulder_yaw",
+      "l_elbow",         "l_wrist_yaw",     "r_shoulder_pitch",
+      "r_shoulder_roll", "r_shoulder_yaw",  "r_elbow"};
+
+  std::ofstream output(path);
+  output
+      << "schema_version: 1\n"
+      << "bridge:\n"
+      << "  robot_name: pm01\n"
+      << "  loop_rate_hz: 250\n"
+      << "  stale_command_timeout_ms: 120\n"
+      << "  startup_idle_policy:\n"
+      << "    mode: zero_torque\n"
+      << "    require_first_valid_command: true\n"
+      << "    use_adapter_safe_command: true\n"
+      << "  fault_policy:\n"
+      << "    mode: fail_stop\n"
+      << "    send_safe_command_on_fault: true\n"
+      << "    publish_degraded_state_while_faulted: true\n"
+      << "    halt_command_writes_while_faulted: true\n"
+      << "dds:\n"
+      << "  domain_id: 0\n"
+      << "  topics:\n"
+      << "    command:\n"
+      << "      name: rt/lowcmd\n"
+      << "    state:\n"
+      << "      name: rt/lowstate\n"
+      << "adapter:\n"
+      << "  kind: pm01\n"
+      << "  robot_model: pm01\n"
+      << "  command_mode: joint_bridge\n"
+      << "  connection:\n"
+      << "    transport: dds\n"
+      << "    interface_hint: pm01\n"
+      << "  startup:\n"
+      << "    read_initial_state_timeout_ms: 1000\n"
+      << "    require_healthy_hardware: true\n"
+      << "  safety:\n"
+      << "    safe_command_profile: zero_torque\n"
+      << "    allow_safe_command_during_shutdown: true\n"
+      << "joint_mapping:\n"
+      << "  validation:\n"
+      << "    expected_sim_joint_count: 24\n"
+      << "    expected_hardware_joint_count: 24\n"
+      << "    require_dense_enabled_sim_indexes: true\n"
+      << "    require_dense_enabled_hardware_indexes: true\n"
+      << "    require_unique_enabled_sim_names: true\n"
+      << "    require_unique_enabled_hardware_names: true\n"
+      << "  entries:\n";
+
+  for (std::size_t index = 0; index < kJointNames.size(); ++index) {
+    output << "    - sim_index: " << index << "\n"
+           << "      hardware_index: " << index << "\n"
+           << "      sim_name: sim_" << kJointNames[index] << "\n"
+           << "      hardware_name: " << kJointNames[index] << "\n"
+           << "      label: " << kJointNames[index] << "\n"
+           << "      enabled: true\n"
+           << "      transforms:\n"
+           << "        position: {sign: 1.0, offset: 0.0}\n"
+           << "        velocity: {sign: 1.0, offset: 0.0}\n"
+           << "        effort: {sign: 1.0, offset: 0.0}\n"
+           << "        stiffness: {sign: 1.0, offset: 0.0}\n"
+           << "        damping: {sign: 1.0, offset: 0.0}\n"
+           << "        acceleration: {sign: 1.0, offset: 0.0}\n"
+           << "      sim_limits:\n"
+           << "        position: {lower: -1.0, upper: 1.0}\n"
+           << "      hardware_limits:\n"
+           << "        position: {lower: -1.0, upper: 1.0}\n";
+  }
+
+  return path;
+}
+
 void TestLoadsSampleBridgeConfig() {
   const auto result = load_bridge_config("../config/kepler_k2.sample.yaml");
   assert(result.succeeded());
@@ -31,12 +112,12 @@ void TestLoadsSampleBridgeConfig() {
   const auto& config = *result.config;
   assert(config.source_path == "../config/kepler_k2.sample.yaml");
   assert(config.robot_type == "kepler_k2");
-  assert(config.runner.loop_period_ns == 4'000'000U);
+  assert(config.runner.loop_period_ns == 1'000'000U);
   assert(config.runner.command_stale_timeout_ns == 120'000'000U);
   assert(config.dds.domain_id == 0U);
-  assert(config.dds.topics.command == "kepler_k2/low_level_command");
-  assert(config.dds.topics.state == "kepler_k2/low_level_state");
-  assert(config.dds.topics.status == "kepler_k2/bridge_status");
+  assert(config.dds.topics.command == "rt/lowcmd");
+  assert(config.dds.topics.state == "rt/lowstate");
+  assert(config.dds.topics.status.empty());
   assert(config.adapter.kind == "kepler_k2");
   assert(config.adapter.robot_name == "kepler_k2");
   assert(config.adapter.robot_model == "k2");
@@ -55,6 +136,57 @@ void TestLoadsSampleBridgeConfig() {
   const JointMapBuildResult joint_map =
       JointMap::build(config.joint_map_entries, config.joint_map_validation);
   assert(joint_map.succeeded());
+}
+
+void TestLoadsSimplifiedKeplerConfig() {
+  const std::string path = "bridge_config_simplified_k2_test.yaml";
+  {
+    std::ofstream output(path);
+    output
+        << "robot_kind: kepler_k2\n"
+        << "loop_rate_hz: 1000\n"
+        << "stale_command_timeout_ms: 120\n"
+        << "dds:\n"
+        << "  command: /lowcmd\n"
+        << "  state: /lowstate\n"
+        << "  status: /bridge_status\n"
+        << "joint_mapping:\n"
+        << "  - name: left_hip_yaw\n"
+        << "    index: 0\n"
+        << "    sign: 1.0\n"
+        << "    offset: 0.0\n"
+        << "    enable: true\n"
+        << "  - name: left_knee\n"
+        << "    index: 1\n"
+        << "    sign: -1.0\n"
+        << "    offset: 0.5\n"
+        << "    enable: false\n"
+        << "  - name: right_hip_yaw\n"
+        << "    index: 2\n"
+        << "    sign: 1.0\n"
+        << "    offset: 0.0\n"
+        << "    enable: true\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->robot_type == "kepler_k2");
+  assert(result.config->runner.loop_period_ns == 1'000'000U);
+  assert(result.config->dds.topics.command == "/lowcmd");
+  assert(result.config->dds.topics.state == "/lowstate");
+  assert(result.config->dds.topics.status == "/bridge_status");
+  assert(result.config->adapter.kind == "kepler_k2");
+  assert(result.config->adapter.command_mode == "torque_pd_passthrough");
+  assert(result.config->adapter.connection.transport == "udp");
+  assert(result.config->adapter.connection.interface_hint == "robot_lan0");
+  assert(result.config->adapter.joint_names.size() == 2U);
+  assert(result.config->adapter.joint_names[0] == "left_hip_yaw");
+  assert(result.config->adapter.joint_names[1] == "right_hip_yaw");
+  assert(result.config->joint_map_entries.size() == 3U);
+  assert(result.config->joint_map_entries[1].enabled == false);
+  assert(result.config->joint_map_entries[1].transforms.position.sign == -1.0);
+  assert(result.config->joint_map_entries[1].transforms.position.offset == 0.5);
 }
 
 void TestRejectsUnsupportedFaultPolicyMode() {
@@ -79,12 +211,10 @@ void TestRejectsUnsupportedFaultPolicyMode() {
         << "dds:\n"
         << "  domain_id: 0\n"
         << "  topics:\n"
-        << "    command:\n"
-        << "      name: kepler_k2/low_level_command\n"
-        << "    state:\n"
-        << "      name: kepler_k2/low_level_state\n"
-        << "    status:\n"
-        << "      name: kepler_k2/bridge_status\n"
+      << "    command:\n"
+      << "      name: rt/lowcmd\n"
+      << "    state:\n"
+      << "      name: rt/lowstate\n"
         << "adapter:\n"
         << "  kind: kepler_k2\n"
         << "  robot_model: k2\n"
@@ -154,12 +284,10 @@ void TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth() {
         << "dds:\n"
         << "  domain_id: 0\n"
         << "  topics:\n"
-        << "    command:\n"
-        << "      name: kepler_k2/low_level_command\n"
-        << "    state:\n"
-        << "      name: kepler_k2/low_level_state\n"
-        << "    status:\n"
-        << "      name: kepler_k2/bridge_status\n"
+      << "    command:\n"
+      << "      name: rt/lowcmd\n"
+      << "    state:\n"
+      << "      name: rt/lowstate\n"
         << "adapter:\n"
         << "  kind: kepler_k2\n"
         << "  robot_model: k2\n"
@@ -249,12 +377,10 @@ void TestLoadsUnknownRobotKindAsFactoryInput() {
         << "dds:\n"
         << "  domain_id: 0\n"
         << "  topics:\n"
-        << "    command:\n"
-        << "      name: kepler_k2/low_level_command\n"
-        << "    state:\n"
-        << "      name: kepler_k2/low_level_state\n"
-        << "    status:\n"
-        << "      name: kepler_k2/bridge_status\n"
+      << "    command:\n"
+      << "      name: rt/lowcmd\n"
+      << "    state:\n"
+      << "      name: rt/lowstate\n"
         << "adapter:\n"
         << "  kind: demo_robot\n"
         << "  robot_model: prototype\n"
@@ -304,6 +430,26 @@ void TestLoadsUnknownRobotKindAsFactoryInput() {
   assert(result.config->adapter.robot_model == "prototype");
 }
 
+void TestLoadsPm01ConfigAsFactoryInput() {
+  const auto result = load_bridge_config(WritePm01Config("bridge_config_pm01_test.yaml"));
+  assert(result.succeeded());
+  assert(result.status == BridgeConfigLoadStatus::kOk);
+  assert(result.config.has_value());
+  assert(result.config->robot_type == "pm01");
+  assert(result.config->adapter.kind == "pm01");
+  assert(result.config->adapter.robot_model == "pm01");
+  assert(result.config->adapter.command_mode == "joint_bridge");
+  assert(result.config->adapter.joint_names.size() == 24U);
+  assert(result.config->adapter.joint_names.front() == "l_hip_yaw");
+  assert(result.config->adapter.joint_names.back() == "r_elbow");
+  assert(result.config->joint_map_entries.size() == 24U);
+
+  const JointMapBuildResult joint_map =
+      JointMap::build(result.config->joint_map_entries,
+                      result.config->joint_map_validation);
+  assert(joint_map.succeeded());
+}
+
 void TestRejectsNegativeDdsDomainId() {
   const std::string path = "bridge_config_negative_domain_test.yaml";
   {
@@ -326,12 +472,10 @@ void TestRejectsNegativeDdsDomainId() {
         << "dds:\n"
         << "  domain_id: -1\n"
         << "  topics:\n"
-        << "    command:\n"
-        << "      name: kepler_k2/low_level_command\n"
-        << "    state:\n"
-        << "      name: kepler_k2/low_level_state\n"
-        << "    status:\n"
-        << "      name: kepler_k2/bridge_status\n"
+      << "    command:\n"
+      << "      name: rt/lowcmd\n"
+      << "    state:\n"
+      << "      name: rt/lowstate\n"
         << "adapter:\n"
         << "  kind: kepler_k2\n"
         << "  robot_model: k2\n"
@@ -383,9 +527,11 @@ void TestRejectsNegativeDdsDomainId() {
 
 int main() {
   TestLoadsSampleBridgeConfig();
+  TestLoadsSimplifiedKeplerConfig();
   TestRejectsUnsupportedFaultPolicyMode();
   TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth();
   TestLoadsUnknownRobotKindAsFactoryInput();
+  TestLoadsPm01ConfigAsFactoryInput();
   TestRejectsNegativeDdsDomainId();
   return 0;
 }
