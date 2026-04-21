@@ -81,6 +81,44 @@ std::vector<JointMapEntry> MakeSampleShapedEntries(const std::size_t count) {
   return entries;
 }
 
+std::vector<JointMapEntry> MakeEntriesWithDisabledMiddleSlot() {
+  std::vector<JointMapEntry> entries;
+
+  JointMapEntry first = MakeEntry(0, 0, "joint_0", "hw_0");
+  first.transforms.position = JointFieldTransform{.sign = 1.0, .offset = 0.5};
+  entries.push_back(first);
+
+  JointMapEntry disabled = MakeEntry(1, 1, "joint_1", "hw_1");
+  disabled.enabled = false;
+  disabled.transforms.position = JointFieldTransform{.sign = -1.0, .offset = 3.0};
+  entries.push_back(disabled);
+
+  JointMapEntry third = MakeEntry(2, 2, "joint_2", "hw_2");
+  third.transforms.position = JointFieldTransform{.sign = 2.0, .offset = -1.0};
+  entries.push_back(third);
+
+  return entries;
+}
+
+std::vector<JointMapEntry> MakeEntriesWithDisabledHighestSlot() {
+  std::vector<JointMapEntry> entries;
+
+  JointMapEntry first = MakeEntry(0, 0, "joint_0", "hw_0");
+  first.transforms.position = JointFieldTransform{.sign = 1.0, .offset = 0.5};
+  entries.push_back(first);
+
+  JointMapEntry second = MakeEntry(1, 1, "joint_1", "hw_1");
+  second.transforms.position = JointFieldTransform{.sign = 2.0, .offset = -1.0};
+  entries.push_back(second);
+
+  JointMapEntry disabled = MakeEntry(2, 2, "joint_2", "hw_2");
+  disabled.enabled = false;
+  disabled.transforms.position = JointFieldTransform{.sign = -1.0, .offset = 3.0};
+  entries.push_back(disabled);
+
+  return entries;
+}
+
 bool HasIssueCode(const std::vector<JointMapIssue>& issues,
                   const JointMapIssueCode code) {
   for (const JointMapIssue& issue : issues) {
@@ -261,6 +299,56 @@ void TestProjectionWarningsKeepProjectedFramesAvailable() {
   AssertVectorNear(state_projection.state->joints.position, {1.0, 2.0, 6.0});
 }
 
+void TestDisabledEntriesKeepSlotWidthAndProjectZeros() {
+  JointMapValidationOptions options;
+  options.require_dense_enabled_sim_indexes = false;
+  options.require_dense_enabled_hardware_indexes = false;
+  JointMapBuildResult build_result =
+      JointMap::build(MakeEntriesWithDisabledHighestSlot(), options);
+  assert(build_result.succeeded());
+  assert(build_result.joint_map.has_value());
+  assert(build_result.joint_map->enabled_entry_count() == 2U);
+
+  const auto hardware_positions =
+      build_result.joint_map->project_positions_sim_to_hardware({1.0, 4.0, 9.0});
+  assert(hardware_positions.succeeded());
+  AssertVectorNear(hardware_positions.values, {1.5, 7.0, 0.0});
+
+  CommandFrame sim_command;
+  sim_command.valid = true;
+  sim_command.joints.position = {1.0, 4.0, 9.0};
+  sim_command.joints.velocity = {2.0, 6.0, 8.0};
+  sim_command.joints.effort = {3.0, 5.0, 7.0};
+  sim_command.joints.stiffness = {4.0, 4.0, 6.0};
+  sim_command.joints.damping = {5.0, 3.0, 5.0};
+
+  const auto command_projection =
+      build_result.joint_map->project_command_sim_to_hardware(sim_command);
+  assert(command_projection.succeeded());
+  assert(command_projection.command.has_value());
+  AssertVectorNear(command_projection.command->joints.position, {1.5, 7.0, 0.0});
+  AssertVectorNear(command_projection.command->joints.velocity, {2.0, 6.0, 0.0});
+  AssertVectorNear(command_projection.command->joints.effort, {3.0, 5.0, 0.0});
+  AssertVectorNear(command_projection.command->joints.stiffness, {4.0, 4.0, 0.0});
+  AssertVectorNear(command_projection.command->joints.damping, {5.0, 3.0, 0.0});
+
+  StateFrame hardware_state;
+  hardware_state.valid = true;
+  hardware_state.joints.position = {1.5, 7.0, 42.0};
+  hardware_state.joints.velocity = {2.0, 6.0, 24.0};
+  hardware_state.joints.effort = {3.0, 5.0, 12.0};
+  hardware_state.joints.acceleration = {4.0, 8.0, 99.0};
+
+  const auto state_projection =
+      build_result.joint_map->project_state_hardware_to_sim(hardware_state);
+  assert(state_projection.succeeded());
+  assert(state_projection.state.has_value());
+  AssertVectorNear(state_projection.state->joints.position, {1.0, 4.0, 0.0});
+  AssertVectorNear(state_projection.state->joints.velocity, {2.0, 6.0, 0.0});
+  AssertVectorNear(state_projection.state->joints.effort, {3.0, 5.0, 0.0});
+  AssertVectorNear(state_projection.state->joints.acceleration, {4.0, 8.0, 0.0});
+}
+
 }
 
 int main() {
@@ -269,5 +357,6 @@ int main() {
   TestWidthMismatchDetection();
   TestStartupValidationFailureForInvalidSampleShapedMapping();
   TestProjectionWarningsKeepProjectedFramesAvailable();
+  TestDisabledEntriesKeepSlotWidthAndProjectZeros();
   return 0;
 }

@@ -267,10 +267,6 @@ void validate_dense_indexes(
                                            const bool use_sim_index) {
   std::size_t width = 0;
   for (const JointMapEntry& entry : entries) {
-    if (!entry.enabled) {
-      continue;
-    }
-
     const std::size_t index = use_sim_index ? entry.sim_index : entry.hardware_index;
     width = std::max(width, index + 1);
   }

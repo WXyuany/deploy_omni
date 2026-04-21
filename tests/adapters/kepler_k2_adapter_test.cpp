@@ -25,6 +25,7 @@ KeplerK2AdapterConfig MakeBaseConfig() {
   config.session.read_timeout_ns = 20;
   config.session.write_timeout_ns = 30;
   config.joint_names = {"left_hip", "right_hip"};
+  config.hardware_slot_count = config.joint_names.size();
   return config;
 }
 
@@ -39,6 +40,14 @@ CommandFrame MakeCommand(const ControlMode mode) {
   command.joints.position = {0.1, -0.1};
   command.joints.velocity = {0.2, -0.2};
   command.joints.effort = {0.3, -0.3};
+  return command;
+}
+
+CommandFrame MakeThreeSlotCommand(const ControlMode mode) {
+  CommandFrame command = MakeCommand(mode);
+  command.joints.position = {0.1, -0.1, 0.0};
+  command.joints.velocity = {0.2, -0.2, 0.0};
+  command.joints.effort = {0.3, -0.3, 0.0};
   return command;
 }
 
@@ -174,6 +183,42 @@ void TestShutdownStopsFurtherAccess() {
   assert(read_after_shutdown.result.status == AdapterCallStatus::kRetryableError);
 }
 
+void TestHardwareSlotWidthCanExceedEnabledJointNames() {
+  KeplerK2AdapterConfig config = MakeBaseConfig();
+  config.hardware_slot_count = 3;
+
+  KeplerK2Adapter adapter(config);
+  assert(adapter.initialize().status == AdapterCallStatus::kOk);
+  assert(adapter.read_state().result.status == AdapterCallStatus::kOk);
+
+  const auto write = adapter.write_command(MakeThreeSlotCommand(ControlMode::kTorque));
+  assert(write.status == AdapterCallStatus::kOk);
+}
+
+void TestRepeatedWritesRecomputeEffortFromLatestState() {
+  KeplerK2Adapter adapter(MakeBaseConfig());
+  assert(adapter.initialize().status == AdapterCallStatus::kOk);
+
+  const auto first_read = adapter.read_state();
+  assert(first_read.result.status == AdapterCallStatus::kOk);
+
+  CommandFrame command = MakeCommand(ControlMode::kTorque);
+  assert(adapter.write_command(command).status == AdapterCallStatus::kOk);
+
+  const auto second_read = adapter.read_state();
+  assert(second_read.result.status == AdapterCallStatus::kOk);
+  assert(second_read.state.has_value());
+  const auto first_effort = second_read.state->joints.effort;
+
+  assert(adapter.write_command(command).status == AdapterCallStatus::kOk);
+  const auto third_read = adapter.read_state();
+  assert(third_read.result.status == AdapterCallStatus::kOk);
+  assert(third_read.state.has_value());
+
+  assert(first_effort.size() == third_read.state->joints.effort.size());
+  assert(first_effort != third_read.state->joints.effort);
+}
+
 }
 
 int main() {
@@ -183,5 +228,7 @@ int main() {
   TestImuGuardAppliesOnlyToMotionCommands();
   TestRequiredSharedMemoryImuSurfacesDegradedHealth();
   TestShutdownStopsFurtherAccess();
+  TestHardwareSlotWidthCanExceedEnabledJointNames();
+  TestRepeatedWritesRecomputeEffortFromLatestState();
   return 0;
 }

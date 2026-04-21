@@ -54,10 +54,15 @@ struct KeplerK2AdapterConfig {
   SessionConfig session;
   SafetyConfig safety;
   std::vector<std::string> joint_names;
+  std::size_t hardware_slot_count{0};
   std::optional<ImuIntegrationConfig> imu;
 
   [[nodiscard]] std::size_t joint_count() const noexcept {
     return joint_names.size();
+  }
+
+  [[nodiscard]] std::size_t command_width() const noexcept {
+    return hardware_slot_count == 0 ? joint_names.size() : hardware_slot_count;
   }
 
   [[nodiscard]] bool has_imu_config() const noexcept { return imu.has_value(); }

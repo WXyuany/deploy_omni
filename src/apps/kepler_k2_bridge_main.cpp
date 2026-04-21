@@ -1,4 +1,6 @@
+#include <chrono>
 #include <string>
+#include <thread>
 
 #include "../../include/bridge/app/robot_assembly_factory.hpp"
 #include "../../include/bridge/config/bridge_config.hpp"
@@ -10,6 +12,25 @@ namespace {
                                const int success_code,
                                const int failure_code) {
   return result.succeeded() ? success_code : failure_code;
+}
+
+[[nodiscard]] bridge::core::RunnerCallResult run_kepler_k2_loop(
+    bridge::core::BridgeRunner& runner, const std::uint64_t loop_period_ns) {
+  auto next_deadline = std::chrono::steady_clock::now();
+
+  while (true) {
+    const bridge::core::RunnerCallResult result = runner.run();
+    if (!result.succeeded()) {
+      return result;
+    }
+
+    if (loop_period_ns == 0) {
+      continue;
+    }
+
+    next_deadline += std::chrono::nanoseconds(loop_period_ns);
+    std::this_thread::sleep_until(next_deadline);
+  }
 }
 
 }
@@ -39,7 +60,8 @@ int main(int argc, char** argv) {
     return to_exit_code(initialize, 0, 5);
   }
 
-  const bridge::core::RunnerCallResult run = runner.run();
+  const bridge::core::RunnerCallResult run =
+      run_kepler_k2_loop(runner, loaded.config->runner.loop_period_ns);
   const bridge::core::RunnerCallResult stop_request = runner.request_stop();
   const bridge::core::RunnerCallResult shutdown = runner.shutdown();
 

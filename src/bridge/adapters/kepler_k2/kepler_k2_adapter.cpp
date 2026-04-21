@@ -100,7 +100,7 @@ class KeplerK2Adapter::Impl {
       return validation;
     }
 
-    vendor_session_ = DeterministicVendorSession(config_.joint_count());
+    vendor_session_ = DeterministicVendorSession(config_.command_width());
     vendor_session_.set_active_mode(bridge::core::ControlMode::kSafeIdle,
                                     control_mode_label(
                                         bridge::core::ControlMode::kSafeIdle));
@@ -127,6 +127,9 @@ class KeplerK2Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.read_timeout_ns);
     last_read_time_ns_ = synthetic_time_ns_;
+    ////// 读取机器人：这里当前还是 deterministic session 占位
+    ////// 读取机器人：未来应该在这里调用真实 K2 底层接口获取最新关节状态
+    vendor_session_.advance_state();
     if (!has_read_state_) {
       has_read_state_ = true;
       lifecycle_state_ = bridge::core::LifecycleState::kActive;
@@ -143,6 +146,8 @@ class KeplerK2Adapter::Impl {
     state.stale = false;
     state.degraded = is_persistently_degraded_locked();
     state.command_stale = false;
+    ////// 读取机器人：这里当前还是从 deterministic session 回填 state.joints
+    ////// 读取机器人：未来应该把真实机器人返回的位置/速度/力矩/加速度写入这些字段
     state.joints.position = vendor_session_.position();
     state.joints.velocity = vendor_session_.velocity();
     state.joints.effort = vendor_session_.effort();
@@ -216,6 +221,8 @@ class KeplerK2Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
     last_write_time_ns_ = synthetic_time_ns_;
+    ////// 写入机器人：这里当前还是 deterministic session 占位
+    ////// 写入机器人：未来应该把共享协议里的 command 转成 K2 真实电机命令并调用底层接口下发
     vendor_session_.apply_command(command);
     persistent_fault_ = persistent_runtime_fault_locked();
 
@@ -245,6 +252,8 @@ class KeplerK2Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
     last_write_time_ns_ = synthetic_time_ns_;
+    ////// 写入机器人安全指令：这里当前还是 deterministic session 占位
+    ////// 写入机器人安全指令：未来应该调用真实 K2 底层接口发送 safe command
     vendor_session_.apply_safe_command();
     persistent_fault_ = persistent_runtime_fault_locked();
 
@@ -301,22 +310,39 @@ class KeplerK2Adapter::Impl {
           acceleration_(joint_count, 0.0) {}
 
     void apply_command(const bridge::core::CommandFrame& command) {
-      if (!command.joints.position.empty()) {
-        position_ = command.joints.position;
+      const std::size_t width = position_.size();
+      std::vector<double> next_effort(width, 0.0);
+      std::vector<double> next_acceleration(width, 0.0);
+
+      for (std::size_t index = 0; index < width; ++index) {
+        const double commanded_position = command.joints.position.empty()
+                                              ? position_[index]
+                                              : command.joints.position[index];
+        const double commanded_velocity = command.joints.velocity.empty()
+                                              ? velocity_[index]
+                                              : command.joints.velocity[index];
+        const double commanded_effort = command.joints.effort.empty()
+                                            ? 0.0
+                                            : command.joints.effort[index];
+        const double position_error = commanded_position - position_[index];
+        const double velocity_error = commanded_velocity - velocity_[index];
+        next_effort[index] = commanded_effort + position_error + velocity_error;
+        next_acceleration[index] = next_effort[index] - effort_[index];
       }
 
-      acceleration_.assign(position_.size(), 0.0);
-      if (!command.joints.velocity.empty()) {
-        acceleration_ = velocity_;
-        velocity_ = command.joints.velocity;
-      }
-      if (!command.joints.effort.empty()) {
-        effort_ = command.joints.effort;
-      }
+      effort_ = std::move(next_effort);
+      acceleration_ = std::move(next_acceleration);
 
       set_active_mode(command.mode,
                       command.mode_label.empty() ? control_mode_label(command.mode)
                                                  : command.mode_label);
+    }
+
+    void advance_state() {
+      for (std::size_t index = 0; index < position_.size(); ++index) {
+        velocity_[index] += effort_[index] * 0.1;
+        position_[index] += velocity_[index] * 0.1;
+      }
     }
 
     void apply_safe_command() {
@@ -394,6 +420,12 @@ class KeplerK2Adapter::Impl {
                                bridge::core::FaultSeverity::kFatal,
                                "joint_names must not be empty");
     }
+    if (config_.command_width() == 0) {
+      return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
+                               bridge::core::FaultCategory::kConfiguration,
+                               bridge::core::FaultSeverity::kFatal,
+                               "hardware slot count must be greater than zero");
+    }
 
     std::unordered_set<std::string> seen_joint_names;
     seen_joint_names.reserve(config_.joint_names.size());
@@ -469,7 +501,7 @@ class KeplerK2Adapter::Impl {
 
   [[nodiscard]] bool command_block_widths_valid(
       const bridge::core::CommandFrame& command) const noexcept {
-    const std::size_t width = config_.joint_count();
+    const std::size_t width = config_.command_width();
     return vector_width_matches(command.joints.position, width) &&
            vector_width_matches(command.joints.velocity, width) &&
            vector_width_matches(command.joints.effort, width) &&

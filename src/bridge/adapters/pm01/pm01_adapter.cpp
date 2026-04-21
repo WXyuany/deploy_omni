@@ -142,6 +142,8 @@ class Pm01Adapter::Impl {
     state.stale = false;
     state.degraded = false;
     state.command_stale = false;
+    ////// 读取机器人：这里当前还是 deterministic session 占位
+    ////// 读取机器人：未来应该从 PM01 真实接口读取状态，再按 dds_joint_indices 投影到共享 state.joints
     state.joints.position = vendor_session_.project_position(config_.dds_joint_indices);
     state.joints.velocity = vendor_session_.project_velocity(config_.dds_joint_indices);
     state.joints.effort = vendor_session_.project_effort(config_.dds_joint_indices);
@@ -220,6 +222,8 @@ class Pm01Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
     last_write_time_ns_ = synthetic_time_ns_;
+    ////// 写入机器人：这里当前还是 deterministic session 占位
+    ////// 写入机器人：未来应该按 dds_joint_indices 把共享 command 映射成 PM01 真实电机命令并调用底层接口下发
     vendor_session_.apply_command(command, config_.dds_joint_indices);
 
     const bridge::core::AdapterCallStatus status =
@@ -248,6 +252,8 @@ class Pm01Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
     last_write_time_ns_ = synthetic_time_ns_;
+    ////// 写入机器人安全指令：这里当前还是 deterministic session 占位
+    ////// 写入机器人安全指令：未来应该调用 PM01 真实接口发送 safe command
     vendor_session_.apply_safe_command();
 
     return make_status_result(bridge::core::AdapterCallStatus::kOk,
