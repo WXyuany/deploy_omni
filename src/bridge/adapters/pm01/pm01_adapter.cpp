@@ -6,14 +6,27 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#include <rclcpp/executors/single_threaded_executor.hpp>
+#include <rclcpp/qos.hpp>
+#include <rclcpp/rclcpp.hpp>
+
+#include "interface_protocol/msg/imu_info.hpp"
+#include "interface_protocol/msg/joint_command.hpp"
+#include "interface_protocol/msg/joint_state.hpp"
+#include "interface_protocol/msg/motion_state.hpp"
+#endif
 
 namespace bridge::adapters::pm01 {
 namespace {
 
 constexpr std::uint64_t kFallbackTickNs = 1'000'000;
+constexpr char kRos2TransportPrefix[] = "ros2";
 
 [[nodiscard]] std::uint64_t tick_or_default(const std::uint64_t value) noexcept {
   return value == 0 ? kFallbackTickNs : value;
@@ -68,6 +81,11 @@ constexpr std::uint64_t kFallbackTickNs = 1'000'000;
   };
 }
 
+[[nodiscard]] bool wants_ros2_backend(const Pm01AdapterConfig& config) noexcept {
+  return config.backend == kRos2TransportPrefix ||
+         config.session.transport_address.rfind(kRos2TransportPrefix, 0) == 0;
+}
+
 }  // namespace
 
 class Pm01Adapter::Impl {
@@ -101,6 +119,28 @@ class Pm01Adapter::Impl {
       return validation;
     }
 
+    if (wants_real_backend()) {
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+      if (const auto init = initialize_ros2_backend_locked(); !init.succeeded()) {
+        lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
+        return init;
+      }
+      initialized_ = true;
+      connection_alive_ = true;
+      has_read_state_ = false;
+      lifecycle_state_ = bridge::core::LifecycleState::kWaitingForState;
+      persistent_fault_.reset();
+      return make_status_result(bridge::core::AdapterCallStatus::kOk,
+                                "pm01 adapter initialized with ROS2 backend");
+#else
+      lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
+      return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
+                               bridge::core::FaultCategory::kConfiguration,
+                               bridge::core::FaultSeverity::kFatal,
+                               "pm01 ROS2 backend requested but not compiled in");
+#endif
+    }
+
     vendor_session_.initialize(config_.motion_state.initial_task);
     initialized_ = true;
     connection_alive_ = true;
@@ -126,6 +166,19 @@ class Pm01Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.read_timeout_ns);
     last_read_time_ns_ = synthetic_time_ns_;
+
+    if (wants_real_backend()) {
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+      return read_state_from_ros2_locked();
+#else
+      result.result = make_error_result(bridge::core::AdapterCallStatus::kFatalError,
+                                        bridge::core::FaultCategory::kConfiguration,
+                                        bridge::core::FaultSeverity::kFatal,
+                                        "pm01 ROS2 backend requested but not compiled in");
+      return result;
+#endif
+    }
+
     if (!has_read_state_) {
       has_read_state_ = true;
       lifecycle_state_ = bridge::core::LifecycleState::kActive;
@@ -203,7 +256,7 @@ class Pm01Adapter::Impl {
                                bridge::core::FaultSeverity::kRecoverable,
                                "initial state read is required before motion commands");
     }
-    if (is_motion_mode(command.mode) && config_.motion_state.required) {
+    if (!wants_real_backend() && is_motion_mode(command.mode) && config_.motion_state.required) {
       if (!vendor_session_.motion_task().has_value()) {
         return make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
                                  bridge::core::FaultCategory::kSafety,
@@ -222,6 +275,18 @@ class Pm01Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
     last_write_time_ns_ = synthetic_time_ns_;
+
+    if (wants_real_backend()) {
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+      return write_command_to_ros2_locked(command);
+#else
+      return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
+                               bridge::core::FaultCategory::kConfiguration,
+                               bridge::core::FaultSeverity::kFatal,
+                               "pm01 ROS2 backend requested but not compiled in");
+#endif
+    }
+
     ////// 写入机器人：这里当前还是 deterministic session 占位
     ////// 写入机器人：未来应该按 dds_joint_indices 把共享 command 映射成 PM01 真实电机命令并调用底层接口下发
     vendor_session_.apply_command(command, config_.dds_joint_indices);
@@ -252,6 +317,18 @@ class Pm01Adapter::Impl {
 
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
     last_write_time_ns_ = synthetic_time_ns_;
+
+    if (wants_real_backend()) {
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+      return write_safe_command_to_ros2_locked();
+#else
+      return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
+                               bridge::core::FaultCategory::kConfiguration,
+                               bridge::core::FaultSeverity::kFatal,
+                               "pm01 ROS2 backend requested but not compiled in");
+#endif
+    }
+
     ////// 写入机器人安全指令：这里当前还是 deterministic session 占位
     ////// 写入机器人安全指令：未来应该调用 PM01 真实接口发送 safe command
     vendor_session_.apply_safe_command();
@@ -262,6 +339,19 @@ class Pm01Adapter::Impl {
 
   [[nodiscard]] bridge::core::AdapterHealthResult query_health() const {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    if (wants_real_backend()) {
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+      return query_ros2_health_locked();
+#else
+      bridge::core::AdapterHealthResult result;
+      result.result = make_error_result(bridge::core::AdapterCallStatus::kFatalError,
+                                        bridge::core::FaultCategory::kConfiguration,
+                                        bridge::core::FaultSeverity::kFatal,
+                                        "pm01 ROS2 backend requested but not compiled in");
+      return result;
+#endif
+    }
 
     bridge::core::AdapterHealthResult result;
     result.result = make_status_result(current_operational_status(),
@@ -287,6 +377,19 @@ class Pm01Adapter::Impl {
 
     lifecycle_state_ = bridge::core::LifecycleState::kStopping;
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
+
+    if (wants_real_backend()) {
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+      return shutdown_ros2_backend_locked();
+#else
+      lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
+      return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
+                               bridge::core::FaultCategory::kConfiguration,
+                               bridge::core::FaultSeverity::kFatal,
+                               "pm01 ROS2 backend requested but not compiled in");
+#endif
+    }
+
     connection_alive_ = false;
     initialized_ = false;
     has_read_state_ = false;
@@ -299,6 +402,229 @@ class Pm01Adapter::Impl {
   }
 
  private:
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+  [[nodiscard]] bridge::core::AdapterCallResult initialize_ros2_backend_locked() {
+    if (!rclcpp::ok()) {
+      int argc = 0;
+      char** argv = nullptr;
+      rclcpp::init(argc, argv);
+      owns_ros_context_ = true;
+    }
+
+    rclcpp::NodeOptions options;
+    ros_node_ = std::make_shared<rclcpp::Node>("pm01_adapter_bridge", options);
+
+    rclcpp::QoS qos(3);
+    qos.best_effort();
+    qos.durability_volatile();
+
+    joint_state_sub_ = ros_node_->create_subscription<interface_protocol::msg::JointState>(
+        "/hardware/joint_state", qos,
+        [this](const interface_protocol::msg::JointState::SharedPtr msg) {
+          if (!has_expected_joint_layout(*msg)) {
+            return;
+          }
+          std::lock_guard<std::mutex> lock(ros_mutex_);
+          latest_joint_state_ = msg;
+        });
+    imu_sub_ = ros_node_->create_subscription<interface_protocol::msg::ImuInfo>(
+        "/hardware/imu_info", qos,
+        [this](const interface_protocol::msg::ImuInfo::SharedPtr msg) {
+          std::lock_guard<std::mutex> lock(ros_mutex_);
+          latest_imu_ = msg;
+        });
+    motion_state_sub_ = ros_node_->create_subscription<interface_protocol::msg::MotionState>(
+        "/motion/motion_state", 1,
+        [this](const interface_protocol::msg::MotionState::SharedPtr msg) {
+          std::lock_guard<std::mutex> lock(ros_mutex_);
+          latest_motion_state_ = msg;
+        });
+    joint_cmd_pub_ = ros_node_->create_publisher<interface_protocol::msg::JointCommand>(
+        "/hardware/joint_command", qos);
+
+    ros_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
+    ros_executor_->add_node(ros_node_);
+
+    return make_status_result(bridge::core::AdapterCallStatus::kOk,
+                              "pm01 ROS2 backend initialized");
+  }
+
+  [[nodiscard]] bridge::core::AdapterReadResult read_state_from_ros2_locked() {
+    bridge::core::AdapterReadResult result;
+    if (ros_executor_) {
+      ros_executor_->spin_some();
+    }
+    interface_protocol::msg::JointState::SharedPtr joint_state;
+    interface_protocol::msg::ImuInfo::SharedPtr imu;
+    {
+      std::lock_guard<std::mutex> ros_lock(ros_mutex_);
+      joint_state = latest_joint_state_;
+      imu = latest_imu_;
+    }
+
+    if (!joint_state) {
+      result.result = make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
+                                        bridge::core::FaultCategory::kAdapterRead,
+                                        bridge::core::FaultSeverity::kRecoverable,
+                                        "waiting for /hardware/joint_state");
+      return result;
+    }
+
+    has_read_state_ = true;
+    lifecycle_state_ = bridge::core::LifecycleState::kActive;
+
+    bridge::core::StateFrame state;
+    state.sequence = ++state_sequence_;
+    state.sample_time_ns = synthetic_time_ns_;
+    state.publish_time_ns = synthetic_time_ns_;
+    state.lifecycle_state = lifecycle_state_;
+    state.active_mode = ros_active_mode_;
+    state.mode_label = ros_mode_label_;
+    state.valid = true;
+    state.stale = false;
+    state.degraded = false;
+    state.command_stale = false;
+    state.joints.position = joint_state->position;
+    state.joints.velocity = joint_state->velocity;
+    state.joints.effort = joint_state->torque;
+    state.joints.acceleration.assign(config_.joint_count(), 0.0);
+
+    if (imu) {
+      bridge::core::ImuSample sample;
+      sample.sample_time_ns = synthetic_time_ns_;
+      sample.valid = true;
+      sample.stale = false;
+      sample.orientation_xyzw = {imu->quaternion.x, imu->quaternion.y,
+                                 imu->quaternion.z, imu->quaternion.w};
+      sample.angular_velocity_xyz = {imu->angular_velocity.x, imu->angular_velocity.y,
+                                     imu->angular_velocity.z};
+      sample.linear_acceleration_xyz = {imu->linear_acceleration.x,
+                                        imu->linear_acceleration.y,
+                                        imu->linear_acceleration.z};
+      state.imu = std::move(sample);
+    } else if (const auto default_imu = build_imu_sample_locked(); default_imu.has_value()) {
+      state.imu = default_imu;
+    }
+
+    result.state = std::move(state);
+    result.result = make_status_result(bridge::core::AdapterCallStatus::kOk,
+                                       "pm01 state read via ROS2 backend");
+    return result;
+  }
+
+  [[nodiscard]] bridge::core::AdapterCallResult write_command_to_ros2_locked(
+      const bridge::core::CommandFrame& command) {
+    interface_protocol::msg::MotionState::SharedPtr motion_state;
+    if (ros_executor_) {
+      ros_executor_->spin_some();
+    }
+    {
+      std::lock_guard<std::mutex> ros_lock(ros_mutex_);
+      motion_state = latest_motion_state_;
+    }
+
+    if (config_.motion_state.required && !motion_state) {
+      return make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
+                               bridge::core::FaultCategory::kSafety,
+                               bridge::core::FaultSeverity::kRecoverable,
+                               "DDS->ROS2 command forwarding is blocked until /motion/motion_state is received");
+    }
+    if (motion_state && motion_state->current_motion_task != config_.motion_state.required_task) {
+      return make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
+                               bridge::core::FaultCategory::kSafety,
+                               bridge::core::FaultSeverity::kRecoverable,
+                               "PM01 command forwarding is blocked until " +
+                                   config_.motion_state.required_task + " is active");
+    }
+
+    interface_protocol::msg::JointCommand ros_command;
+    ros_command.position.resize(config_.joint_count(), 0.0);
+    ros_command.velocity.resize(config_.joint_count(), 0.0);
+    ros_command.feed_forward_torque.resize(config_.joint_count(), 0.0);
+    ros_command.torque.resize(config_.joint_count(), 0.0);
+    ros_command.stiffness.resize(config_.joint_count(), 0.0);
+    ros_command.damping.resize(config_.joint_count(), 0.0);
+    ros_command.parallel_parser_type = 0U;
+
+    for (std::size_t index = 0; index < config_.joint_count(); ++index) {
+      ros_command.position[index] = command.joints.position.empty() ? 0.0 : command.joints.position[index];
+      ros_command.velocity[index] = command.joints.velocity.empty() ? 0.0 : command.joints.velocity[index];
+      ros_command.feed_forward_torque[index] = 0.0;
+      ros_command.torque[index] = 0.0;
+      ros_command.stiffness[index] = command.joints.stiffness.empty() ? 0.0 : command.joints.stiffness[index];
+      ros_command.damping[index] = command.joints.damping.empty() ? 0.0 : command.joints.damping[index];
+    }
+
+    joint_cmd_pub_->publish(ros_command);
+    ros_active_mode_ = command.mode;
+    ros_mode_label_ = command.mode_label.empty() ? control_mode_label(command.mode)
+                                                 : command.mode_label;
+    return make_status_result(command.degraded ? bridge::core::AdapterCallStatus::kDegraded
+                                               : bridge::core::AdapterCallStatus::kOk,
+                              "pm01 command forwarded via ROS2 backend");
+  }
+
+  [[nodiscard]] bridge::core::AdapterCallResult write_safe_command_to_ros2_locked() {
+    interface_protocol::msg::JointCommand ros_command;
+    ros_command.position.resize(config_.joint_count(), 0.0);
+    ros_command.velocity.resize(config_.joint_count(), 0.0);
+    ros_command.feed_forward_torque.resize(config_.joint_count(), 0.0);
+    ros_command.torque.resize(config_.joint_count(), 0.0);
+    ros_command.stiffness.resize(config_.joint_count(), 0.0);
+    ros_command.damping.resize(config_.joint_count(), 0.0);
+    ros_command.parallel_parser_type = 0U;
+    joint_cmd_pub_->publish(ros_command);
+    ros_active_mode_ = bridge::core::ControlMode::kSafeIdle;
+    ros_mode_label_ = control_mode_label(bridge::core::ControlMode::kSafeIdle);
+    return make_status_result(bridge::core::AdapterCallStatus::kOk,
+                              "pm01 safe command forwarded via ROS2 backend");
+  }
+
+  [[nodiscard]] bridge::core::AdapterHealthResult query_ros2_health_locked() const {
+    bridge::core::AdapterHealthResult result;
+    result.result = make_status_result(current_operational_status(),
+                                       connection_alive_ ? "pm01 ROS2 backend healthy"
+                                                         : "pm01 ROS2 backend unavailable",
+                                       persistent_fault_);
+    result.health.state = connection_alive_ ? bridge::core::HealthState::kHealthy
+                                            : bridge::core::HealthState::kUnknown;
+    result.health.safe_command_supported = config_.safety.safe_command_supported;
+    result.health.connection_alive = connection_alive_;
+    result.health.degraded = false;
+    result.health.last_read_time_ns = last_read_time_ns_;
+    result.health.last_write_time_ns = last_write_time_ns_;
+    result.health.fault = persistent_fault_;
+    return result;
+  }
+
+  [[nodiscard]] bridge::core::AdapterCallResult shutdown_ros2_backend_locked() {
+    connection_alive_ = false;
+    initialized_ = false;
+    has_read_state_ = false;
+    joint_cmd_pub_.reset();
+    joint_state_sub_.reset();
+    imu_sub_.reset();
+    motion_state_sub_.reset();
+    ros_executor_.reset();
+    ros_node_.reset();
+    if (owns_ros_context_ && rclcpp::ok()) {
+      rclcpp::shutdown();
+      owns_ros_context_ = false;
+    }
+    lifecycle_state_ = bridge::core::LifecycleState::kStopped;
+    persistent_fault_.reset();
+    return make_status_result(bridge::core::AdapterCallStatus::kOk,
+                              "pm01 ROS2 backend shutdown complete");
+  }
+
+  [[nodiscard]] static bool has_expected_joint_layout(
+      const interface_protocol::msg::JointState& msg) {
+    return msg.position.size() == kPm01JointCount &&
+           msg.velocity.size() == kPm01JointCount &&
+           msg.torque.size() == kPm01JointCount;
+  }
+#endif
+
   class DeterministicVendorSession {
    public:
     explicit DeterministicVendorSession(const std::size_t dds_motor_count =
@@ -511,6 +837,10 @@ class Pm01Adapter::Impl {
                               "pm01 adapter config validated");
   }
 
+  [[nodiscard]] bool wants_real_backend() const noexcept {
+    return wants_ros2_backend(config_);
+  }
+
   [[nodiscard]] bool command_block_widths_valid(
       const bridge::core::CommandFrame& command) const noexcept {
     const std::size_t width = config_.joint_count();
@@ -663,6 +993,21 @@ class Pm01Adapter::Impl {
   bool has_read_state_{false};
   bridge::core::LifecycleState lifecycle_state_{bridge::core::LifecycleState::kCreated};
   DeterministicVendorSession vendor_session_;
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+  bool owns_ros_context_{false};
+  std::shared_ptr<rclcpp::Node> ros_node_;
+  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> ros_executor_;
+  mutable std::mutex ros_mutex_;
+  rclcpp::Subscription<interface_protocol::msg::JointState>::SharedPtr joint_state_sub_;
+  rclcpp::Subscription<interface_protocol::msg::ImuInfo>::SharedPtr imu_sub_;
+  rclcpp::Subscription<interface_protocol::msg::MotionState>::SharedPtr motion_state_sub_;
+  rclcpp::Publisher<interface_protocol::msg::JointCommand>::SharedPtr joint_cmd_pub_;
+  interface_protocol::msg::JointState::SharedPtr latest_joint_state_;
+  interface_protocol::msg::ImuInfo::SharedPtr latest_imu_;
+  interface_protocol::msg::MotionState::SharedPtr latest_motion_state_;
+  bridge::core::ControlMode ros_active_mode_{bridge::core::ControlMode::kSafeIdle};
+  std::string ros_mode_label_{control_mode_label(bridge::core::ControlMode::kSafeIdle)};
+#endif
 };
 
 Pm01Adapter::Pm01Adapter(Pm01AdapterConfig config)

@@ -35,6 +35,7 @@ Pm01AdapterConfig MakeBaseConfig() {
   config.session.initialize_timeout_ns = 10;
   config.session.read_timeout_ns = 20;
   config.session.write_timeout_ns = 30;
+  config.backend = "deterministic";
   config.motion_state.required = true;
   config.motion_state.required_task = "joint_bridge";
   config.publish_default_imu_when_missing = true;
@@ -173,6 +174,35 @@ void TestSafeCommandUnsupportedReportsCapability() {
   assert(health.health.connection_alive);
 }
 
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+void TestRos2BackendCanInitializeAndShutdown() {
+  Pm01AdapterConfig config = MakeBaseConfig();
+  config.backend = "ros2";
+
+  Pm01Adapter adapter(config);
+  const auto init = adapter.initialize();
+  assert(init.status == AdapterCallStatus::kOk);
+
+  const auto health = adapter.query_health();
+  assert(health.result.status == AdapterCallStatus::kOk);
+  assert(health.health.connection_alive);
+
+  const auto shutdown = adapter.shutdown();
+  assert(shutdown.status == AdapterCallStatus::kOk);
+}
+
+void TestLegacyRos2TransportAddressStillWorks() {
+  Pm01AdapterConfig config = MakeBaseConfig();
+  config.backend.clear();
+  config.session.transport_address = "ros2:pm01";
+
+  Pm01Adapter adapter(config);
+  const auto init = adapter.initialize();
+  assert(init.status == AdapterCallStatus::kOk);
+  assert(adapter.shutdown().status == AdapterCallStatus::kOk);
+}
+#endif
+
 }
 
 int main() {
@@ -183,5 +213,9 @@ int main() {
   TestDdsJointIndicesDriveReadbackProjection();
   TestReadStateProvidesDefaultImuWhenUnavailable();
   TestSafeCommandUnsupportedReportsCapability();
+#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+  TestRos2BackendCanInitializeAndShutdown();
+  TestLegacyRos2TransportAddressStillWorks();
+#endif
   return 0;
 }

@@ -33,6 +33,8 @@ target_link_options(bridge_project_options INTERFACE
 )
 
 find_package(Threads REQUIRED)
+find_package(rclcpp QUIET)
+find_package(interface_protocol QUIET)
 
 if(NOT EXISTS "${BRIDGE_CYCLONE_LIB_DIR}/libddsc.so")
   message(FATAL_ERROR "Missing CycloneDDS library: ${BRIDGE_CYCLONE_LIB_DIR}/libddsc.so")
@@ -127,6 +129,32 @@ add_library(bridge_adapter_pm01 STATIC
   src/bridge/adapters/pm01/pm01_adapter.cpp
 )
 target_link_libraries(bridge_adapter_pm01 PUBLIC bridge_project_options)
+
+if(rclcpp_FOUND AND interface_protocol_FOUND)
+  target_compile_definitions(bridge_adapter_pm01 PRIVATE BRIDGE_PM01_REAL_BACKEND_AVAILABLE=1)
+  if(TARGET rclcpp::rclcpp)
+    target_link_libraries(bridge_adapter_pm01 PUBLIC rclcpp::rclcpp)
+  elseif(DEFINED rclcpp_LIBRARIES)
+    target_link_libraries(bridge_adapter_pm01 PUBLIC ${rclcpp_LIBRARIES})
+  endif()
+  if(DEFINED rclcpp_INCLUDE_DIRS)
+    target_include_directories(bridge_adapter_pm01 PUBLIC ${rclcpp_INCLUDE_DIRS})
+  endif()
+  if(DEFINED interface_protocol_INCLUDE_DIRS)
+    target_include_directories(bridge_adapter_pm01 PUBLIC ${interface_protocol_INCLUDE_DIRS})
+  endif()
+  if(DEFINED interface_protocol_LIBRARIES)
+    target_link_libraries(bridge_adapter_pm01 PUBLIC ${interface_protocol_LIBRARIES})
+  endif()
+  foreach(interface_target
+      interface_protocol::interface_protocol__rosidl_generator_cpp
+      interface_protocol::interface_protocol__rosidl_typesupport_cpp
+      interface_protocol::interface_protocol__rosidl_typesupport_introspection_cpp)
+    if(TARGET ${interface_target})
+      target_link_libraries(bridge_adapter_pm01 PUBLIC ${interface_target})
+    endif()
+  endforeach()
+endif()
 
 add_library(bridge_extensions STATIC
   src/bridge/extensions/legacy_kepler_hooks.cpp
@@ -229,6 +257,31 @@ if(BUILD_TESTING)
     bridge_project_options
     bridge_adapter_pm01
   )
+  if(rclcpp_FOUND AND interface_protocol_FOUND)
+    target_compile_definitions(pm01_adapter_test PRIVATE BRIDGE_PM01_REAL_BACKEND_AVAILABLE=1)
+    if(TARGET rclcpp::rclcpp)
+      target_link_libraries(pm01_adapter_test PRIVATE rclcpp::rclcpp)
+    elseif(DEFINED rclcpp_LIBRARIES)
+      target_link_libraries(pm01_adapter_test PRIVATE ${rclcpp_LIBRARIES})
+    endif()
+    if(DEFINED rclcpp_INCLUDE_DIRS)
+      target_include_directories(pm01_adapter_test PRIVATE ${rclcpp_INCLUDE_DIRS})
+    endif()
+    if(DEFINED interface_protocol_INCLUDE_DIRS)
+      target_include_directories(pm01_adapter_test PRIVATE ${interface_protocol_INCLUDE_DIRS})
+    endif()
+    if(DEFINED interface_protocol_LIBRARIES)
+      target_link_libraries(pm01_adapter_test PRIVATE ${interface_protocol_LIBRARIES})
+    endif()
+    foreach(interface_target
+        interface_protocol::interface_protocol__rosidl_generator_cpp
+        interface_protocol::interface_protocol__rosidl_typesupport_cpp
+        interface_protocol::interface_protocol__rosidl_typesupport_introspection_cpp)
+      if(TARGET ${interface_target})
+        target_link_libraries(pm01_adapter_test PRIVATE ${interface_target})
+      endif()
+    endforeach()
+  endif()
 
   bridge_add_test(hooks_isolation_test
     tests/extensions/hooks_isolation_test.cpp

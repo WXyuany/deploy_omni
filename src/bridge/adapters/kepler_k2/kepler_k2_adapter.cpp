@@ -14,6 +14,7 @@ namespace bridge::adapters::kepler_k2 {
 namespace {
 
 constexpr std::uint64_t kFallbackTickNs = 1'000'000;
+constexpr char kMotorApiTransportPrefix[] = "motor_api";
 
 [[nodiscard]] std::uint64_t tick_or_default(const std::uint64_t value) noexcept {
   return value == 0 ? kFallbackTickNs : value;
@@ -68,6 +69,10 @@ constexpr std::uint64_t kFallbackTickNs = 1'000'000;
   };
 }
 
+[[nodiscard]] bool wants_real_backend(const KeplerK2AdapterConfig& config) noexcept {
+  return config.session.transport_address.rfind(kMotorApiTransportPrefix, 0) == 0;
+}
+
 }
 
 class KeplerK2Adapter::Impl {
@@ -98,6 +103,14 @@ class KeplerK2Adapter::Impl {
     if (const auto validation = validate_config_locked(); !validation.succeeded()) {
       lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
       return validation;
+    }
+
+    if (wants_real_backend(config_)) {
+      lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
+      return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
+                               bridge::core::FaultCategory::kConfiguration,
+                               bridge::core::FaultSeverity::kFatal,
+                               "kepler_k2 real motor_api backend requested but not compiled in");
     }
 
     vendor_session_ = DeterministicVendorSession(config_.command_width());
