@@ -189,6 +189,80 @@ void TestLoadsSimplifiedKeplerConfig() {
   assert(result.config->joint_map_entries[1].transforms.position.offset == 0.5);
 }
 
+void TestLoadsPm01BackendField() {
+  const std::string path = "bridge_config_pm01_backend_test.yaml";
+  {
+    std::ofstream output(path);
+    output
+        << "schema_version: 1\n"
+        << "bridge:\n"
+        << "  robot_name: pm01\n"
+        << "  loop_rate_hz: 250\n"
+        << "  stale_command_timeout_ms: 120\n"
+        << "  startup_idle_policy:\n"
+        << "    mode: zero_torque\n"
+        << "    require_first_valid_command: true\n"
+        << "    use_adapter_safe_command: true\n"
+        << "  fault_policy:\n"
+        << "    mode: fail_stop\n"
+        << "    send_safe_command_on_fault: true\n"
+        << "    publish_degraded_state_while_faulted: true\n"
+        << "    halt_command_writes_while_faulted: true\n"
+        << "dds:\n"
+        << "  domain_id: 0\n"
+        << "  topics:\n"
+        << "    command:\n"
+        << "      name: rt/lowcmd\n"
+        << "    state:\n"
+        << "      name: rt/lowstate\n"
+        << "adapter:\n"
+        << "  kind: pm01\n"
+        << "  backend: ros2\n"
+        << "  robot_model: pm01\n"
+        << "  command_mode: joint_bridge\n"
+        << "  connection:\n"
+        << "    transport: dds\n"
+        << "    interface_hint: pm01\n"
+        << "  startup:\n"
+        << "    read_initial_state_timeout_ms: 1000\n"
+        << "    require_healthy_hardware: true\n"
+        << "  safety:\n"
+        << "    safe_command_profile: zero_torque\n"
+        << "    allow_safe_command_during_shutdown: true\n"
+        << "joint_mapping:\n"
+        << "  validation:\n"
+        << "    expected_sim_joint_count: 1\n"
+        << "    expected_hardware_joint_count: 1\n"
+        << "    require_dense_enabled_sim_indexes: true\n"
+        << "    require_dense_enabled_hardware_indexes: true\n"
+        << "    require_unique_enabled_sim_names: true\n"
+        << "    require_unique_enabled_hardware_names: true\n"
+        << "  entries:\n"
+        << "    - sim_index: 0\n"
+        << "      hardware_index: 0\n"
+        << "      sim_name: joint_0\n"
+        << "      hardware_name: joint_0\n"
+        << "      label: joint_0\n"
+        << "      enabled: true\n"
+        << "      transforms:\n"
+        << "        position: {sign: 1.0, offset: 0.0}\n"
+        << "        velocity: {sign: 1.0, offset: 0.0}\n"
+        << "        effort: {sign: 1.0, offset: 0.0}\n"
+        << "        stiffness: {sign: 1.0, offset: 0.0}\n"
+        << "        damping: {sign: 1.0, offset: 0.0}\n"
+        << "        acceleration: {sign: 1.0, offset: 0.0}\n"
+        << "      sim_limits:\n"
+        << "        position: {lower: -1.0, upper: 1.0}\n"
+        << "      hardware_limits:\n"
+        << "        position: {lower: -1.0, upper: 1.0}\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->adapter.backend == "ros2");
+}
+
 void TestRejectsUnsupportedFaultPolicyMode() {
   const std::string path = "bridge_config_invalid_test.yaml";
   {
@@ -528,6 +602,7 @@ void TestRejectsNegativeDdsDomainId() {
 int main() {
   TestLoadsSampleBridgeConfig();
   TestLoadsSimplifiedKeplerConfig();
+  TestLoadsPm01BackendField();
   TestRejectsUnsupportedFaultPolicyMode();
   TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth();
   TestLoadsUnknownRobotKindAsFactoryInput();

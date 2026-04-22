@@ -40,6 +40,7 @@ struct Pm01AdapterConfig {
   SessionConfig session;
   SafetyConfig safety;
   MotionStateConfig motion_state;
+  std::string backend;
   bool publish_default_imu_when_missing{true};
   std::vector<std::string> joint_names;
   std::vector<std::int64_t> dds_joint_indices;

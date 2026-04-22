@@ -48,6 +48,7 @@ struct RobotAdapterConfig {
   std::string kind;
   std::string robot_name;
   std::string robot_model;
+  std::string backend;
   std::string command_mode;
   AdapterConnectionConfig connection;
   AdapterStartupPolicyConfig startup;

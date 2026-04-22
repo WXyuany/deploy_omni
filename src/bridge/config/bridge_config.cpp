@@ -80,6 +80,7 @@ struct RawBridgeConfig {
   std::optional<bool> halt_command_writes_while_faulted;
   std::optional<std::string> adapter_kind;
   std::optional<std::string> robot_model;
+  std::optional<std::string> adapter_backend;
   std::optional<std::string> command_mode;
   std::optional<int> dds_domain_id;
   std::optional<std::string> dds_command_topic;
@@ -643,6 +644,8 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           raw->adapter_kind = key_value->second;
         } else if (key_value->first == "robot_model") {
           raw->robot_model = key_value->second;
+        } else if (key_value->first == "backend") {
+          raw->adapter_backend = key_value->second;
         } else if (key_value->first == "command_mode") {
           raw->command_mode = key_value->second;
         }
@@ -1095,6 +1098,7 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
 
   const std::string adapter_kind = *raw.adapter_kind;
   const std::string robot_name = raw.robot_name.value_or(adapter_kind);
+  const std::string adapter_backend = raw.adapter_backend.value_or("");
   const std::string command_mode = raw.command_mode.value_or(
       adapter_kind == "pm01" ? "joint_bridge" : "torque_pd_passthrough");
   const int dds_domain_id = raw.dds_domain_id.value_or(0);
@@ -1244,6 +1248,7 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.adapter.kind = adapter_kind;
   config.adapter.robot_name = robot_name;
   config.adapter.robot_model = raw.robot_model.value_or("");
+  config.adapter.backend = adapter_backend;
   config.adapter.command_mode = command_mode;
   config.adapter.connection.transport = connection_transport;
   config.adapter.connection.interface_hint = connection_interface_hint;
