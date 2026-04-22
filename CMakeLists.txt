@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.16)
 
 project(adapter_any_robot LANGUAGES CXX)
 
+option(BUILD_ROBOT_KEPLER_K2 "Build kepler_k2 adapter support" ON)
+option(BUILD_ROBOT_PM01 "Build pm01 adapter support" ON)
+
+if(NOT BUILD_ROBOT_KEPLER_K2 AND NOT BUILD_ROBOT_PM01)
+  message(FATAL_ERROR "At least one robot adapter must be enabled. Set BUILD_ROBOT_KEPLER_K2 or BUILD_ROBOT_PM01 to ON.")
+endif()
+
 set(BRIDGE_UNITREE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/library/unitree_sdk2")
 set(BRIDGE_CYCLONE_SDK_DIR "${BRIDGE_UNITREE_SDK_DIR}/thirdparty")
 set(BRIDGE_CYCLONE_LIB_DIR "${BRIDGE_CYCLONE_SDK_DIR}/lib/${CMAKE_SYSTEM_PROCESSOR}")
@@ -120,40 +127,44 @@ add_library(bridge_config STATIC
 )
 target_link_libraries(bridge_config PUBLIC bridge_project_options bridge_core)
 
-add_library(bridge_adapter_kepler_k2 STATIC
-  src/bridge/adapters/kepler_k2/kepler_k2_adapter.cpp
-)
-target_link_libraries(bridge_adapter_kepler_k2 PUBLIC bridge_project_options)
+if(BUILD_ROBOT_KEPLER_K2)
+  add_library(bridge_adapter_kepler_k2 STATIC
+    src/bridge/adapters/kepler_k2/kepler_k2_adapter.cpp
+  )
+  target_link_libraries(bridge_adapter_kepler_k2 PUBLIC bridge_project_options)
+endif()
 
-add_library(bridge_adapter_pm01 STATIC
-  src/bridge/adapters/pm01/pm01_adapter.cpp
-)
-target_link_libraries(bridge_adapter_pm01 PUBLIC bridge_project_options)
+if(BUILD_ROBOT_PM01)
+  add_library(bridge_adapter_pm01 STATIC
+    src/bridge/adapters/pm01/pm01_adapter.cpp
+  )
+  target_link_libraries(bridge_adapter_pm01 PUBLIC bridge_project_options)
 
-if(rclcpp_FOUND AND interface_protocol_FOUND)
-  target_compile_definitions(bridge_adapter_pm01 PRIVATE BRIDGE_PM01_REAL_BACKEND_AVAILABLE=1)
-  if(TARGET rclcpp::rclcpp)
-    target_link_libraries(bridge_adapter_pm01 PUBLIC rclcpp::rclcpp)
-  elseif(DEFINED rclcpp_LIBRARIES)
-    target_link_libraries(bridge_adapter_pm01 PUBLIC ${rclcpp_LIBRARIES})
-  endif()
-  if(DEFINED rclcpp_INCLUDE_DIRS)
-    target_include_directories(bridge_adapter_pm01 PUBLIC ${rclcpp_INCLUDE_DIRS})
-  endif()
-  if(DEFINED interface_protocol_INCLUDE_DIRS)
-    target_include_directories(bridge_adapter_pm01 PUBLIC ${interface_protocol_INCLUDE_DIRS})
-  endif()
-  if(DEFINED interface_protocol_LIBRARIES)
-    target_link_libraries(bridge_adapter_pm01 PUBLIC ${interface_protocol_LIBRARIES})
-  endif()
-  foreach(interface_target
-      interface_protocol::interface_protocol__rosidl_generator_cpp
-      interface_protocol::interface_protocol__rosidl_typesupport_cpp
-      interface_protocol::interface_protocol__rosidl_typesupport_introspection_cpp)
-    if(TARGET ${interface_target})
-      target_link_libraries(bridge_adapter_pm01 PUBLIC ${interface_target})
+  if(rclcpp_FOUND AND interface_protocol_FOUND)
+    target_compile_definitions(bridge_adapter_pm01 PRIVATE BRIDGE_PM01_REAL_BACKEND_AVAILABLE=1)
+    if(TARGET rclcpp::rclcpp)
+      target_link_libraries(bridge_adapter_pm01 PUBLIC rclcpp::rclcpp)
+    elseif(DEFINED rclcpp_LIBRARIES)
+      target_link_libraries(bridge_adapter_pm01 PUBLIC ${rclcpp_LIBRARIES})
     endif()
-  endforeach()
+    if(DEFINED rclcpp_INCLUDE_DIRS)
+      target_include_directories(bridge_adapter_pm01 PUBLIC ${rclcpp_INCLUDE_DIRS})
+    endif()
+    if(DEFINED interface_protocol_INCLUDE_DIRS)
+      target_include_directories(bridge_adapter_pm01 PUBLIC ${interface_protocol_INCLUDE_DIRS})
+    endif()
+    if(DEFINED interface_protocol_LIBRARIES)
+      target_link_libraries(bridge_adapter_pm01 PUBLIC ${interface_protocol_LIBRARIES})
+    endif()
+    foreach(interface_target
+        interface_protocol::interface_protocol__rosidl_generator_cpp
+        interface_protocol::interface_protocol__rosidl_typesupport_cpp
+        interface_protocol::interface_protocol__rosidl_typesupport_introspection_cpp)
+      if(TARGET ${interface_target})
+        target_link_libraries(bridge_adapter_pm01 PUBLIC ${interface_target})
+      endif()
+    endforeach()
+  endif()
 endif()
 
 add_library(bridge_extensions STATIC
@@ -164,15 +175,25 @@ target_link_libraries(bridge_extensions PUBLIC bridge_project_options bridge_cor
 add_library(bridge_app_support STATIC
   src/bridge/app/robot_assembly_factory.cpp
 )
+if(BUILD_ROBOT_KEPLER_K2)
+  target_compile_definitions(bridge_app_support PUBLIC BRIDGE_BUILD_KEPLER_K2=1)
+endif()
+if(BUILD_ROBOT_PM01)
+  target_compile_definitions(bridge_app_support PUBLIC BRIDGE_BUILD_PM01=1)
+endif()
 target_link_libraries(bridge_app_support PUBLIC
   bridge_project_options
   bridge_core
   bridge_dds_codecs
   bridge_dds_runtime
   bridge_config
-  bridge_adapter_kepler_k2
-  bridge_adapter_pm01
 )
+if(BUILD_ROBOT_KEPLER_K2)
+  target_link_libraries(bridge_app_support PUBLIC bridge_adapter_kepler_k2)
+endif()
+if(BUILD_ROBOT_PM01)
+  target_link_libraries(bridge_app_support PUBLIC bridge_adapter_pm01)
+endif()
 
 add_executable(kepler_k2_bridge
   src/apps/kepler_k2_bridge_main.cpp
@@ -246,41 +267,45 @@ if(BUILD_TESTING)
   )
   add_dependencies(dds_translation_test unitree_sdk2_nomain)
 
-  bridge_add_test(kepler_k2_adapter_test
-    tests/adapters/kepler_k2_adapter_test.cpp
-    bridge_project_options
-    bridge_adapter_kepler_k2
-  )
+  if(BUILD_ROBOT_KEPLER_K2)
+    bridge_add_test(kepler_k2_adapter_test
+      tests/adapters/kepler_k2_adapter_test.cpp
+      bridge_project_options
+      bridge_adapter_kepler_k2
+    )
+  endif()
 
-  bridge_add_test(pm01_adapter_test
-    tests/adapters/pm01_adapter_test.cpp
-    bridge_project_options
-    bridge_adapter_pm01
-  )
-  if(rclcpp_FOUND AND interface_protocol_FOUND)
-    target_compile_definitions(pm01_adapter_test PRIVATE BRIDGE_PM01_REAL_BACKEND_AVAILABLE=1)
-    if(TARGET rclcpp::rclcpp)
-      target_link_libraries(pm01_adapter_test PRIVATE rclcpp::rclcpp)
-    elseif(DEFINED rclcpp_LIBRARIES)
-      target_link_libraries(pm01_adapter_test PRIVATE ${rclcpp_LIBRARIES})
-    endif()
-    if(DEFINED rclcpp_INCLUDE_DIRS)
-      target_include_directories(pm01_adapter_test PRIVATE ${rclcpp_INCLUDE_DIRS})
-    endif()
-    if(DEFINED interface_protocol_INCLUDE_DIRS)
-      target_include_directories(pm01_adapter_test PRIVATE ${interface_protocol_INCLUDE_DIRS})
-    endif()
-    if(DEFINED interface_protocol_LIBRARIES)
-      target_link_libraries(pm01_adapter_test PRIVATE ${interface_protocol_LIBRARIES})
-    endif()
-    foreach(interface_target
-        interface_protocol::interface_protocol__rosidl_generator_cpp
-        interface_protocol::interface_protocol__rosidl_typesupport_cpp
-        interface_protocol::interface_protocol__rosidl_typesupport_introspection_cpp)
-      if(TARGET ${interface_target})
-        target_link_libraries(pm01_adapter_test PRIVATE ${interface_target})
+  if(BUILD_ROBOT_PM01)
+    bridge_add_test(pm01_adapter_test
+      tests/adapters/pm01_adapter_test.cpp
+      bridge_project_options
+      bridge_adapter_pm01
+    )
+    if(rclcpp_FOUND AND interface_protocol_FOUND)
+      target_compile_definitions(pm01_adapter_test PRIVATE BRIDGE_PM01_REAL_BACKEND_AVAILABLE=1)
+      if(TARGET rclcpp::rclcpp)
+        target_link_libraries(pm01_adapter_test PRIVATE rclcpp::rclcpp)
+      elseif(DEFINED rclcpp_LIBRARIES)
+        target_link_libraries(pm01_adapter_test PRIVATE ${rclcpp_LIBRARIES})
       endif()
-    endforeach()
+      if(DEFINED rclcpp_INCLUDE_DIRS)
+        target_include_directories(pm01_adapter_test PRIVATE ${rclcpp_INCLUDE_DIRS})
+      endif()
+      if(DEFINED interface_protocol_INCLUDE_DIRS)
+        target_include_directories(pm01_adapter_test PRIVATE ${interface_protocol_INCLUDE_DIRS})
+      endif()
+      if(DEFINED interface_protocol_LIBRARIES)
+        target_link_libraries(pm01_adapter_test PRIVATE ${interface_protocol_LIBRARIES})
+      endif()
+      foreach(interface_target
+          interface_protocol::interface_protocol__rosidl_generator_cpp
+          interface_protocol::interface_protocol__rosidl_typesupport_cpp
+          interface_protocol::interface_protocol__rosidl_typesupport_introspection_cpp)
+        if(TARGET ${interface_target})
+          target_link_libraries(pm01_adapter_test PRIVATE ${interface_target})
+        endif()
+      endforeach()
+    endif()
   endif()
 
   bridge_add_test(hooks_isolation_test

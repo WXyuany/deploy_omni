@@ -7,8 +7,12 @@
 #include <utility>
 #include <vector>
 
+#if defined(BRIDGE_BUILD_KEPLER_K2)
 #include "../../../include/bridge/adapters/kepler_k2/kepler_k2_adapter.hpp"
+#endif
+#if defined(BRIDGE_BUILD_PM01)
 #include "../../../include/bridge/adapters/pm01/pm01_adapter.hpp"
+#endif
 #include "../../../include/bridge/dds/dds_factory.hpp"
 
 namespace bridge::app {
@@ -23,6 +27,7 @@ namespace {
   return width;
 }
 
+#if defined(BRIDGE_BUILD_KEPLER_K2)
 [[nodiscard]] adapters::kepler_k2::KeplerK2AdapterConfig
 to_kepler_k2_adapter_config(const config::BridgeStartupConfig& startup_config) {
   adapters::kepler_k2::KeplerK2AdapterConfig config;
@@ -47,7 +52,9 @@ to_kepler_k2_adapter_config(const config::BridgeStartupConfig& startup_config) {
       configured_hardware_width(startup_config.joint_map_entries);
   return config;
 }
+#endif
 
+#if defined(BRIDGE_BUILD_PM01)
 struct Pm01AdapterConfigBuildResult {
   std::optional<adapters::pm01::Pm01AdapterConfig> config;
   std::string detail;
@@ -117,7 +124,9 @@ struct Pm01AdapterConfigBuildResult {
       .detail = "built pm01 adapter config from startup config",
   };
 }
+#endif
 
+#if defined(BRIDGE_BUILD_KEPLER_K2)
 [[nodiscard]] RobotAssemblyCreateResult create_kepler_k2_assembly(
     const config::BridgeStartupConfig& startup_config) {
   const config::JointMapBuildResult joint_map_result = config::JointMap::build(
@@ -150,7 +159,9 @@ struct Pm01AdapterConfigBuildResult {
       .assembly = std::move(assembly),
   };
 }
+#endif
 
+#if defined(BRIDGE_BUILD_PM01)
 [[nodiscard]] RobotAssemblyCreateResult create_pm01_assembly(
     const config::BridgeStartupConfig& startup_config) {
   const config::JointMapBuildResult joint_map_result = config::JointMap::build(
@@ -193,6 +204,7 @@ struct Pm01AdapterConfigBuildResult {
       .assembly = std::move(assembly),
   };
 }
+#endif
 
 struct RobotFactoryEntry {
   std::string_view robot_type;
@@ -200,10 +212,14 @@ struct RobotFactoryEntry {
 };
 
 [[nodiscard]] const std::vector<RobotFactoryEntry>& factory_entries() {
-  static const std::vector<RobotFactoryEntry> entries{{
+  static const std::vector<RobotFactoryEntry> entries{
+#if defined(BRIDGE_BUILD_KEPLER_K2)
       {.robot_type = "kepler_k2", .create = &create_kepler_k2_assembly},
+#endif
+#if defined(BRIDGE_BUILD_PM01)
       {.robot_type = "pm01", .create = &create_pm01_assembly},
-  }};
+#endif
+  };
   return entries;
 }
 

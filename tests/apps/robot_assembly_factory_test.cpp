@@ -105,6 +105,7 @@ std::string WritePm01Config(const std::string& path) {
 }
 
 void TestCreatesKeplerAssemblyFromSampleConfig() {
+#if defined(BRIDGE_BUILD_KEPLER_K2)
   const bridge::config::BridgeConfigLoadResult loaded = LoadSampleConfig();
   assert(loaded.succeeded());
   assert(loaded.config.has_value());
@@ -124,6 +125,7 @@ void TestCreatesKeplerAssemblyFromSampleConfig() {
   assert(runner.run().succeeded());
   assert(runner.request_stop().succeeded());
   assert(runner.shutdown().succeeded());
+#endif
 }
 
 void TestRejectsUnsupportedRobotType() {
@@ -141,11 +143,17 @@ void TestRejectsUnsupportedRobotType() {
 void TestRegisteredRobotTypesIncludesPm01() {
   const std::vector<std::string_view> types =
       bridge::app::registered_robot_types();
+#if defined(BRIDGE_BUILD_PM01)
   assert(std::find(types.begin(), types.end(), std::string_view{"pm01"}) !=
          types.end());
+#else
+  assert(std::find(types.begin(), types.end(), std::string_view{"pm01"}) ==
+         types.end());
+#endif
 }
 
 void TestCreatesPm01AssemblyFromConfig() {
+#if defined(BRIDGE_BUILD_PM01)
   const std::string path = WritePm01Config("pm01_robot_assembly_test.yaml");
   const bridge::config::BridgeConfigLoadResult loaded =
       bridge::config::load_bridge_config(path);
@@ -158,6 +166,19 @@ void TestCreatesPm01AssemblyFromConfig() {
   assert(assembled.assembly.has_value());
   assert(assembled.assembly->adapter != nullptr);
   assert(assembled.assembly->adapter->name() == std::string_view{"pm01"});
+#endif
+}
+
+void TestRegisteredRobotTypesIncludesKeplerK2() {
+  const std::vector<std::string_view> types =
+      bridge::app::registered_robot_types();
+#if defined(BRIDGE_BUILD_KEPLER_K2)
+  assert(std::find(types.begin(), types.end(), std::string_view{"kepler_k2"}) !=
+         types.end());
+#else
+  assert(std::find(types.begin(), types.end(), std::string_view{"kepler_k2"}) ==
+         types.end());
+#endif
 }
 
 }
@@ -165,6 +186,7 @@ void TestCreatesPm01AssemblyFromConfig() {
 int main() {
   TestCreatesKeplerAssemblyFromSampleConfig();
   TestRejectsUnsupportedRobotType();
+  TestRegisteredRobotTypesIncludesKeplerK2();
   TestRegisteredRobotTypesIncludesPm01();
   TestCreatesPm01AssemblyFromConfig();
   return 0;
