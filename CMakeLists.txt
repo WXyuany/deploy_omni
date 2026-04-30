@@ -9,6 +9,18 @@ if(NOT BUILD_ROBOT_KEPLER_K2 AND NOT BUILD_ROBOT_PM01)
   message(FATAL_ERROR "At least one robot adapter must be enabled. Set BUILD_ROBOT_KEPLER_K2 or BUILD_ROBOT_PM01 to ON.")
 endif()
 
+set(BRIDGE_BUILD_KEPLER_K2 0)
+if(BUILD_ROBOT_KEPLER_K2)
+  set(BRIDGE_BUILD_KEPLER_K2 1)
+endif()
+
+set(BRIDGE_BUILD_PM01 0)
+if(BUILD_ROBOT_PM01)
+  set(BRIDGE_BUILD_PM01 1)
+endif()
+
+set(BRIDGE_PM01_REAL_BACKEND_AVAILABLE 0)
+
 set(BRIDGE_UNITREE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/library/unitree_sdk2")
 set(BRIDGE_CYCLONE_SDK_DIR "${BRIDGE_UNITREE_SDK_DIR}/thirdparty")
 set(BRIDGE_CYCLONE_LIB_DIR "${BRIDGE_CYCLONE_SDK_DIR}/lib/${CMAKE_SYSTEM_PROCESSOR}")
@@ -26,9 +38,17 @@ include(CTest)
 
 add_library(bridge_project_options INTERFACE)
 target_compile_features(bridge_project_options INTERFACE cxx_std_17)
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/bridge/build_config.hpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/bridge/build_config.hpp"
+  @ONLY
+)
+
 target_include_directories(bridge_project_options INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
 
 target_link_directories(bridge_project_options INTERFACE
@@ -41,7 +61,93 @@ target_link_options(bridge_project_options INTERFACE
 
 find_package(Threads REQUIRED)
 find_package(rclcpp QUIET)
-find_package(interface_protocol QUIET)
+
+set(BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/interface_protocol")
+set(BRIDGE_INTERFACE_PROTOCOL_BUILD_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/vendor/interface_protocol-build")
+set(BRIDGE_INTERFACE_PROTOCOL_INSTALL_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/vendor/interface_protocol-install")
+
+if(EXISTS "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}/CMakeLists.txt")
+  file(GLOB BRIDGE_INTERFACE_PROTOCOL_SOURCE_FILES CONFIGURE_DEPENDS
+    "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}/CMakeLists.txt"
+    "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}/package.xml"
+    "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}/msg/*.msg")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${BRIDGE_INTERFACE_PROTOCOL_SOURCE_FILES})
+
+  file(MAKE_DIRECTORY "${BRIDGE_INTERFACE_PROTOCOL_BUILD_DIR}")
+
+  set(BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_ARGS
+    -S "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}"
+    -B "${BRIDGE_INTERFACE_PROTOCOL_BUILD_DIR}"
+    -DCMAKE_INSTALL_PREFIX=${BRIDGE_INTERFACE_PROTOCOL_INSTALL_DIR}
+    -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE})
+
+  if(CMAKE_GENERATOR)
+    list(APPEND BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_ARGS -G "${CMAKE_GENERATOR}")
+  endif()
+  if(CMAKE_GENERATOR_PLATFORM)
+    list(APPEND BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_ARGS -A "${CMAKE_GENERATOR_PLATFORM}")
+  endif()
+  if(CMAKE_GENERATOR_TOOLSET)
+    list(APPEND BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_ARGS -T "${CMAKE_GENERATOR_TOOLSET}")
+  endif()
+  if(CMAKE_TOOLCHAIN_FILE)
+    list(APPEND BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_ARGS
+      -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
+  endif()
+  if(CMAKE_PREFIX_PATH)
+    list(APPEND BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_ARGS
+      -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH})
+  endif()
+  if(CMAKE_MAKE_PROGRAM)
+    list(APPEND BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_ARGS
+      -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM})
+  endif()
+
+  set(BRIDGE_INTERFACE_PROTOCOL_BUILD_ARGS
+    --build "${BRIDGE_INTERFACE_PROTOCOL_BUILD_DIR}"
+    --target install)
+
+  if(CMAKE_CONFIGURATION_TYPES)
+    list(GET CMAKE_CONFIGURATION_TYPES 0 BRIDGE_INTERFACE_PROTOCOL_BUILD_CONFIG)
+    list(APPEND BRIDGE_INTERFACE_PROTOCOL_BUILD_ARGS
+      --config "${BRIDGE_INTERFACE_PROTOCOL_BUILD_CONFIG}")
+  elseif(CMAKE_BUILD_TYPE)
+    list(APPEND BRIDGE_INTERFACE_PROTOCOL_BUILD_ARGS
+      --config "${CMAKE_BUILD_TYPE}")
+  endif()
+
+  execute_process(
+    COMMAND ${CMAKE_COMMAND} ${BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_ARGS}
+    RESULT_VARIABLE BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_RESULT
+  )
+  if(NOT BRIDGE_INTERFACE_PROTOCOL_CONFIGURE_RESULT EQUAL 0)
+    message(FATAL_ERROR
+      "Failed to configure vendored interface_protocol package from ${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}")
+  endif()
+
+  execute_process(
+    COMMAND ${CMAKE_COMMAND} ${BRIDGE_INTERFACE_PROTOCOL_BUILD_ARGS}
+    RESULT_VARIABLE BRIDGE_INTERFACE_PROTOCOL_BUILD_RESULT
+  )
+  if(NOT BRIDGE_INTERFACE_PROTOCOL_BUILD_RESULT EQUAL 0)
+    message(FATAL_ERROR
+      "Failed to build vendored interface_protocol package from ${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}")
+  endif()
+
+  set(interface_protocol_DIR
+    "${BRIDGE_INTERFACE_PROTOCOL_INSTALL_DIR}/share/interface_protocol/cmake"
+    CACHE PATH "Vendored interface_protocol package config directory" FORCE)
+endif()
+
+if(DEFINED interface_protocol_DIR AND EXISTS "${interface_protocol_DIR}")
+  find_package(interface_protocol QUIET PATHS "${interface_protocol_DIR}" NO_DEFAULT_PATH)
+else()
+  find_package(interface_protocol QUIET)
+endif()
 
 if(NOT EXISTS "${BRIDGE_CYCLONE_LIB_DIR}/libddsc.so")
   message(FATAL_ERROR "Missing CycloneDDS library: ${BRIDGE_CYCLONE_LIB_DIR}/libddsc.so")
@@ -141,7 +247,12 @@ if(BUILD_ROBOT_PM01)
   target_link_libraries(bridge_adapter_pm01 PUBLIC bridge_project_options)
 
   if(rclcpp_FOUND AND interface_protocol_FOUND)
-    target_compile_definitions(bridge_adapter_pm01 PRIVATE BRIDGE_PM01_REAL_BACKEND_AVAILABLE=1)
+    set(BRIDGE_PM01_REAL_BACKEND_AVAILABLE 1)
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/include/bridge/build_config.hpp.in"
+      "${CMAKE_CURRENT_BINARY_DIR}/generated/bridge/build_config.hpp"
+      @ONLY
+    )
     if(TARGET rclcpp::rclcpp)
       target_link_libraries(bridge_adapter_pm01 PUBLIC rclcpp::rclcpp)
     elseif(DEFINED rclcpp_LIBRARIES)
@@ -175,12 +286,6 @@ target_link_libraries(bridge_extensions PUBLIC bridge_project_options bridge_cor
 add_library(bridge_app_support STATIC
   src/bridge/app/robot_assembly_factory.cpp
 )
-if(BUILD_ROBOT_KEPLER_K2)
-  target_compile_definitions(bridge_app_support PUBLIC BRIDGE_BUILD_KEPLER_K2=1)
-endif()
-if(BUILD_ROBOT_PM01)
-  target_compile_definitions(bridge_app_support PUBLIC BRIDGE_BUILD_PM01=1)
-endif()
 target_link_libraries(bridge_app_support PUBLIC
   bridge_project_options
   bridge_core
@@ -195,16 +300,16 @@ if(BUILD_ROBOT_PM01)
   target_link_libraries(bridge_app_support PUBLIC bridge_adapter_pm01)
 endif()
 
-add_executable(kepler_k2_bridge
-  src/apps/kepler_k2_bridge_main.cpp
+add_executable(adapter_bridge
+  src/apps/adapter_bridge_main.cpp
 )
-target_link_libraries(kepler_k2_bridge PRIVATE
+target_link_libraries(adapter_bridge PRIVATE
   bridge_project_options
   bridge_core
   bridge_config
   bridge_app_support
 )
-set_target_properties(kepler_k2_bridge PROPERTIES
+set_target_properties(adapter_bridge PROPERTIES
   BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
 )
 
@@ -282,7 +387,6 @@ if(BUILD_TESTING)
       bridge_adapter_pm01
     )
     if(rclcpp_FOUND AND interface_protocol_FOUND)
-      target_compile_definitions(pm01_adapter_test PRIVATE BRIDGE_PM01_REAL_BACKEND_AVAILABLE=1)
       if(TARGET rclcpp::rclcpp)
         target_link_libraries(pm01_adapter_test PRIVATE rclcpp::rclcpp)
       elseif(DEFINED rclcpp_LIBRARIES)
