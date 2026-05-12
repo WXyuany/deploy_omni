@@ -19,7 +19,7 @@ using bridge::core::LifecycleState;
 KeplerK2AdapterConfig MakeBaseConfig() {
   KeplerK2AdapterConfig config;
   config.session.robot_id = "k2-test";
-  config.session.transport_address = "loopback";
+  config.session.transport_endpoint = "loopback";
   config.session.control_profile = "deterministic";
   config.session.initialize_timeout_ns = 10;
   config.session.read_timeout_ns = 20;

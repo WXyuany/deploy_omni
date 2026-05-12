@@ -37,7 +37,8 @@ struct ImuIntegrationConfig {
 
 struct SessionConfig {
   std::string robot_id;
-  std::string transport_address;
+  // 这是一个复合名称：前缀是通信方式，后缀是机器人类型。
+  std::string transport_endpoint;
   std::string control_profile;
   std::uint64_t initialize_timeout_ns{0};
   std::uint64_t read_timeout_ns{0};

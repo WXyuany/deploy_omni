@@ -1,6 +1,6 @@
 # Standalone build check
 
-`kepler_k2_bridge` is currently wired as a thin process entrypoint that loads startup config once, freezes runtime values, selects a registered robot factory, and then assembles these existing pieces:
+`adapter_bridge` is currently wired as a thin process entrypoint that loads startup config once, freezes runtime values, selects a registered robot factory, and then assembles these existing pieces:
 
 - `bridge::config::load_bridge_config()`
 - `bridge::app::create_robot_assembly()`
@@ -24,4 +24,53 @@ This intentionally keeps process-level wiring thin: the app loads config, select
 
 Build verification command:
 
-`cmake -S . -B build && cmake --build build --target kepler_k2_bridge -j && ctest --test-dir build --output-on-failure`
+`cmake -S . -B build && cmake --build build --target adapter_bridge -j && ctest --test-dir build --output-on-failure`
+
+## `scripts/build_robot.sh` 使用说明
+
+这个脚本用于快速配置并编译通用入口程序 `adapter_bridge`，避免每次手写较长的 CMake 命令。
+
+### 命令格式
+
+`./scripts/build_robot.sh <pm01|kepler_k2|all> [build-dir]`
+
+- 第一个参数表示要启用的机器人类型：
+  - `pm01`：只编译 PM01 相关适配器
+  - `kepler_k2` 或 `k2`：只编译 Kepler K2 相关适配器
+  - `all`：同时编译 PM01 和 Kepler K2 相关适配器
+- 第二个参数可选，用于指定构建目录。
+
+### 默认构建目录
+
+- `./scripts/build_robot.sh pm01` → `build-pm01-only`
+- `./scripts/build_robot.sh kepler_k2` → `build-k2-only`
+- `./scripts/build_robot.sh all` → `build`
+
+### 常用示例
+
+只编译 PM01：
+
+`./scripts/build_robot.sh pm01`
+
+只编译 Kepler K2：
+
+`./scripts/build_robot.sh kepler_k2`
+
+或：
+
+`./scripts/build_robot.sh k2`
+
+同时编译两个机器人：
+
+`./scripts/build_robot.sh all`
+
+指定自定义构建目录：
+
+`./scripts/build_robot.sh pm01 my-build-dir`
+
+### 脚本实际执行的操作
+
+脚本内部会执行两步：
+
+1. 调用 `cmake -S ... -B ...` 配置构建目录，并设置 `BUILD_ROBOT_KEPLER_K2` / `BUILD_ROBOT_PM01`。
+2. 调用 `cmake --build ... --target adapter_bridge`，只编译通用入口目标 `adapter_bridge`。

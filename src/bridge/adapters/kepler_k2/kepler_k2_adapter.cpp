@@ -70,7 +70,7 @@ constexpr char kMotorApiTransportPrefix[] = "motor_api";
 }
 
 [[nodiscard]] bool wants_real_backend(const KeplerK2AdapterConfig& config) noexcept {
-  return config.session.transport_address.rfind(kMotorApiTransportPrefix, 0) == 0;
+  return config.session.transport_endpoint.rfind(kMotorApiTransportPrefix, 0) == 0;
 }
 
 }
@@ -421,11 +421,11 @@ class KeplerK2Adapter::Impl {
                                bridge::core::FaultSeverity::kFatal,
                                "session.robot_id must not be empty");
     }
-    if (config_.session.transport_address.empty()) {
+    if (config_.session.transport_endpoint.empty()) {
       return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
                                bridge::core::FaultCategory::kConfiguration,
                                bridge::core::FaultSeverity::kFatal,
-                               "session.transport_address must not be empty");
+                                "session.transport_endpoint must not be empty");
     }
     if (config_.joint_names.empty()) {
       return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
