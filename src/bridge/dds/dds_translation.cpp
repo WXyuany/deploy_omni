@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include <unitree/dds_wrapper/common/crc.h>
 #include "unitree/idl/hg/IMUState_.hpp"
 #include "unitree/idl/hg/MotorCmd_.hpp"
 #include "unitree/idl/hg/MotorState_.hpp"
@@ -110,6 +111,9 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
 [[nodiscard]] std::size_t configured_sim_width(const config::JointMap& joint_map) {
   std::size_t width = 0;
   for (const auto& entry : joint_map.entries()) {
+    if (!entry.enabled) {
+      continue;
+    }
     width = std::max(width, entry.sim_index + 1);
   }
   return width;
@@ -126,6 +130,12 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
     }
   }
   return true;
+}
+
+[[nodiscard]] bool validate_lowcmd_crc(const unitree_hg::msg::dds_::LowCmd_& message) {
+  auto copy = message;
+  return copy.crc() == crc32_core(reinterpret_cast<uint32_t*>(&copy),
+                                  (sizeof(copy) >> 2) - 1);
 }
 
 [[nodiscard]] TranslationResult validate_lowcmd(
@@ -146,6 +156,14 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
                        make_fault(core::FaultCategory::kInvalidCommand,
                                   core::FaultSeverity::kRecoverable,
                                   "unsupported command control mode",
+                                   infer_sequence(message), receive_time_ns));
+  }
+  if (!validate_lowcmd_crc(message)) {
+    return make_result(TranslationStatus::kRejected,
+                       "command message failed crc validation",
+                       make_fault(core::FaultCategory::kInvalidCommand,
+                                  core::FaultSeverity::kRecoverable,
+                                  "command message failed crc validation",
                                   infer_sequence(message), receive_time_ns));
   }
   if (!validate_motor_commands_finite(message.motor_cmd(), width)) {
@@ -178,12 +196,14 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
   }
   if (state.imu.has_value()) {
     if (state.imu->orientation_xyzw.size() != 4U ||
+        state.imu->rpy_xyz.size() != 3U ||
         state.imu->angular_velocity_xyz.size() != 3U ||
         state.imu->linear_acceleration_xyz.size() != 3U) {
       return make_result(TranslationStatus::kRejected,
-                         "imu vectors must have widths 4/3/3 when imu is present");
+                         "imu vectors must have widths 4/3/3/3 when imu is present");
     }
     if (!has_only_finite_values(state.imu->orientation_xyzw) ||
+        !has_only_finite_values(state.imu->rpy_xyz) ||
         !has_only_finite_values(state.imu->angular_velocity_xyz) ||
         !has_only_finite_values(state.imu->linear_acceleration_xyz)) {
       return make_result(TranslationStatus::kRejected,
@@ -197,8 +217,9 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
     const core::StateFrame& state) {
   unitree_hg::msg::dds_::LowState_ message;
   message.version({1U, 0U});
-  message.mode_pr(0U);
-  message.mode_machine(encode_control_mode(state.active_mode));
+  message.mode_pr(state.mode_pr);
+  const std::uint8_t encoded_mode = encode_control_mode(state.active_mode);
+  message.mode_machine(state.mode_machine == 0U ? encoded_mode : state.mode_machine);
   message.tick(static_cast<std::uint32_t>(state.sequence));
 
   auto motors = message.motor_state();
@@ -214,13 +235,19 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
 
   unitree_hg::msg::dds_::IMUState_ imu_state;
   if (state.imu.has_value()) {
-    std::array<float, 4> quaternion{0.0F, 0.0F, 0.0F, 1.0F};
+    std::array<float, 4> quaternion{1.0F, 0.0F, 0.0F, 0.0F};
+    std::array<float, 3> rpy{0.0F, 0.0F, 0.0F};
     std::array<float, 3> gyroscope{0.0F, 0.0F, 0.0F};
     std::array<float, 3> accelerometer{0.0F, 0.0F, 0.0F};
-    std::copy_n(state.imu->orientation_xyzw.begin(), 4, quaternion.begin());
+    quaternion[0] = static_cast<float>(state.imu->orientation_xyzw[3]);
+    quaternion[1] = static_cast<float>(state.imu->orientation_xyzw[0]);
+    quaternion[2] = static_cast<float>(state.imu->orientation_xyzw[1]);
+    quaternion[3] = static_cast<float>(state.imu->orientation_xyzw[2]);
+    std::copy_n(state.imu->rpy_xyz.begin(), 3, rpy.begin());
     std::copy_n(state.imu->angular_velocity_xyz.begin(), 3, gyroscope.begin());
     std::copy_n(state.imu->linear_acceleration_xyz.begin(), 3, accelerometer.begin());
     imu_state.quaternion(quaternion);
+    imu_state.rpy(rpy);
     imu_state.gyroscope(gyroscope);
     imu_state.accelerometer(accelerometer);
   }
@@ -243,6 +270,8 @@ CommandTranslation translate_lowcmd_to_command(
   command.sequence = infer_sequence(message);
   command.source_time_ns = infer_source_time_ns(message);
   command.receive_time_ns = receive_time_ns;
+  command.mode_pr = message.mode_pr();
+  command.mode_machine = message.mode_machine();
   command.mode = decode_control_mode(message.mode_machine());
   command.mode_label = "unitree_lowcmd";
   command.valid = true;
@@ -278,6 +307,8 @@ CommandTranslation translate_lowcmd_to_hardware_command(
   command.sequence = infer_sequence(message);
   command.source_time_ns = infer_source_time_ns(message);
   command.receive_time_ns = receive_time_ns;
+  command.mode_pr = message.mode_pr();
+  command.mode_machine = message.mode_machine();
   command.mode = decode_control_mode(message.mode_machine());
   command.mode_label = "unitree_lowcmd";
   command.valid = true;

@@ -1,4 +1,5 @@
 #include "../../../include/bridge/app/robot_assembly_factory.hpp"
+#include "bridge/build_config.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -7,16 +8,33 @@
 #include <utility>
 #include <vector>
 
-#if defined(BRIDGE_BUILD_KEPLER_K2)
+#if BRIDGE_BUILD_KEPLER_K2
 #include "../../../include/bridge/adapters/kepler_k2/kepler_k2_adapter.hpp"
 #endif
-#if defined(BRIDGE_BUILD_PM01)
+#if BRIDGE_BUILD_PM01
 #include "../../../include/bridge/adapters/pm01/pm01_adapter.hpp"
 #endif
+#if BRIDGE_BUILD_UNITREE_G1
+#include "../../../include/bridge/adapters/unitree_g1/unitree_g1_adapter.hpp"
+#endif
 #include "../../../include/bridge/dds/dds_factory.hpp"
+#include "../../../include/bridge/extensions/hooks.hpp"
 
 namespace bridge::app {
 namespace {
+
+[[nodiscard]] std::unique_ptr<extensions::ObservationHook>
+create_observation_hook(const config::BridgeStartupConfig& startup_config) {
+  if (!startup_config.debug_print.enabled()) {
+    return nullptr;
+  }
+  return extensions::make_terminal_observation_hook({
+      .print_command = startup_config.debug_print.command,
+      .print_state = startup_config.debug_print.state,
+      .rate_hz = startup_config.debug_print.rate_hz,
+      .joint_names = startup_config.adapter.joint_names,
+  });
+}
 
 [[nodiscard]] std::size_t configured_hardware_width(
     const std::vector<config::JointMapEntry>& entries) {
@@ -27,12 +45,12 @@ namespace {
   return width;
 }
 
-#if defined(BRIDGE_BUILD_KEPLER_K2)
+#if BRIDGE_BUILD_KEPLER_K2
 [[nodiscard]] adapters::kepler_k2::KeplerK2AdapterConfig
 to_kepler_k2_adapter_config(const config::BridgeStartupConfig& startup_config) {
   adapters::kepler_k2::KeplerK2AdapterConfig config;
   config.session.robot_id = startup_config.adapter.robot_name;
-  config.session.transport_address = startup_config.adapter.connection.transport +
+  config.session.transport_endpoint = startup_config.adapter.connection.transport +
                                      ":" +
                                      startup_config.adapter.connection.interface_hint;
   config.session.control_profile = startup_config.adapter.command_mode;
@@ -54,7 +72,58 @@ to_kepler_k2_adapter_config(const config::BridgeStartupConfig& startup_config) {
 }
 #endif
 
-#if defined(BRIDGE_BUILD_PM01)
+#if BRIDGE_BUILD_UNITREE_G1
+struct UnitreeG1AdapterConfigBuildResult {
+  std::optional<adapters::unitree_g1::UnitreeG1AdapterConfig> config;
+  std::string detail;
+
+  [[nodiscard]] bool succeeded() const noexcept {
+    return config.has_value();
+  }
+};
+
+[[nodiscard]] UnitreeG1AdapterConfigBuildResult to_unitree_g1_adapter_config(
+    const config::BridgeStartupConfig& startup_config) {
+  if (startup_config.adapter.joint_names.size() !=
+      adapters::unitree_g1::kUnitreeG1JointCount) {
+    return {
+        .config = std::nullopt,
+        .detail = "unitree_g1 requires exactly 29 enabled joint names in adapter config",
+    };
+  }
+
+  adapters::unitree_g1::UnitreeG1AdapterConfig config;
+  config.session.transport_mode = "unitree_dds";
+  config.session.robot_id = startup_config.adapter.robot_name;
+  config.session.transport_endpoint = startup_config.adapter.connection.transport +
+                                     ":" +
+                                     startup_config.adapter.connection.interface_hint;
+  config.session.control_profile = startup_config.adapter.command_mode;
+  config.session.command_topic = "rt/lowcmd";
+  config.session.state_topic = "rt/lowstate";
+  config.session.imu_topic = "rt/secondary_imu";
+  config.session.initialize_timeout_ns =
+      startup_config.adapter.startup.read_initial_state_timeout_ns;
+  config.session.read_timeout_ns = startup_config.runner.loop_period_ns;
+  config.session.write_timeout_ns = startup_config.runner.loop_period_ns;
+  config.safety.safe_command_supported =
+      startup_config.runner.startup_idle_policy != core::StartupIdlePolicy::kNoCommandWrite &&
+      startup_config.adapter.safety.allow_safe_command_during_shutdown &&
+      startup_config.adapter.safety.safe_command_profile == "zero_torque";
+  config.safety.require_initial_state_before_motion =
+      startup_config.adapter.startup.require_healthy_hardware;
+  config.joint_names = startup_config.adapter.joint_names;
+  config.hardware_slot_count =
+      configured_hardware_width(startup_config.joint_map_entries);
+
+  return {
+      .config = std::move(config),
+      .detail = "built unitree_g1 adapter config from startup config",
+  };
+}
+#endif
+
+#if BRIDGE_BUILD_PM01
 struct Pm01AdapterConfigBuildResult {
   std::optional<adapters::pm01::Pm01AdapterConfig> config;
   std::string detail;
@@ -76,10 +145,11 @@ struct Pm01AdapterConfigBuildResult {
 
   adapters::pm01::Pm01AdapterConfig config;
   config.session.robot_id = startup_config.adapter.robot_name;
-  config.session.transport_address = startup_config.adapter.connection.transport +
+  config.session.transport_endpoint = startup_config.adapter.connection.transport +
                                      ":" +
                                      startup_config.adapter.connection.interface_hint;
   config.session.control_profile = startup_config.adapter.command_mode;
+  config.backend = startup_config.adapter.backend;
   config.session.initialize_timeout_ns =
       startup_config.adapter.startup.read_initial_state_timeout_ns;
   config.session.read_timeout_ns = startup_config.runner.loop_period_ns;
@@ -90,6 +160,11 @@ struct Pm01AdapterConfigBuildResult {
       startup_config.adapter.safety.safe_command_profile == "zero_torque";
   config.safety.require_initial_state_before_motion =
       startup_config.adapter.startup.require_healthy_hardware;
+  config.motion_state.required = startup_config.adapter.motion_state.required;
+  config.motion_state.required_task =
+      startup_config.adapter.motion_state.required_task;
+  config.motion_state.initial_task =
+      startup_config.adapter.motion_state.initial_task;
   config.joint_names = startup_config.adapter.joint_names;
   config.dds_joint_indices.reserve(config.joint_names.size());
 
@@ -126,7 +201,53 @@ struct Pm01AdapterConfigBuildResult {
 }
 #endif
 
-#if defined(BRIDGE_BUILD_KEPLER_K2)
+#if BRIDGE_BUILD_UNITREE_G1
+[[nodiscard]] RobotAssemblyCreateResult create_unitree_g1_assembly(
+    const config::BridgeStartupConfig& startup_config) {
+  const config::JointMapBuildResult joint_map_result = config::JointMap::build(
+      startup_config.joint_map_entries, startup_config.joint_map_validation);
+  if (!joint_map_result.succeeded() || !joint_map_result.joint_map.has_value()) {
+    return {
+        .status = RobotAssemblyCreateStatus::kInvalidConfig,
+        .detail = "joint-map build failed during unitree_g1 assembly",
+        .assembly = std::nullopt,
+    };
+  }
+
+  UnitreeG1AdapterConfigBuildResult adapter_config_result =
+      to_unitree_g1_adapter_config(startup_config);
+  if (!adapter_config_result.succeeded()) {
+    return {
+        .status = RobotAssemblyCreateStatus::kInvalidConfig,
+        .detail = adapter_config_result.detail,
+        .assembly = std::nullopt,
+    };
+  }
+
+  RobotAssembly assembly{
+      .joint_map = std::move(*joint_map_result.joint_map),
+      .adapter = std::make_unique<adapters::unitree_g1::UnitreeG1Adapter>(
+          std::move(*adapter_config_result.config)),
+      .command_ingress = nullptr,
+      .state_egress = nullptr,
+      .observation_hook = create_observation_hook(startup_config),
+  };
+
+  dds::DdsAssembly dds_assembly =
+      dds::create_dds_assembly(startup_config, assembly.joint_map);
+  assembly.runtime = dds_assembly.runtime;
+  assembly.command_ingress = std::move(dds_assembly.command_ingress);
+  assembly.state_egress = std::move(dds_assembly.state_egress);
+
+  return {
+      .status = RobotAssemblyCreateStatus::kOk,
+      .detail = "assembled unitree_g1 robot runtime",
+      .assembly = std::move(assembly),
+  };
+}
+#endif
+
+#if BRIDGE_BUILD_KEPLER_K2
 [[nodiscard]] RobotAssemblyCreateResult create_kepler_k2_assembly(
     const config::BridgeStartupConfig& startup_config) {
   const config::JointMapBuildResult joint_map_result = config::JointMap::build(
@@ -145,6 +266,7 @@ struct Pm01AdapterConfigBuildResult {
           to_kepler_k2_adapter_config(startup_config)),
       .command_ingress = nullptr,
       .state_egress = nullptr,
+      .observation_hook = create_observation_hook(startup_config),
   };
 
   dds::DdsAssembly dds_assembly =
@@ -161,7 +283,7 @@ struct Pm01AdapterConfigBuildResult {
 }
 #endif
 
-#if defined(BRIDGE_BUILD_PM01)
+#if BRIDGE_BUILD_PM01
 [[nodiscard]] RobotAssemblyCreateResult create_pm01_assembly(
     const config::BridgeStartupConfig& startup_config) {
   const config::JointMapBuildResult joint_map_result = config::JointMap::build(
@@ -190,6 +312,7 @@ struct Pm01AdapterConfigBuildResult {
           std::move(*adapter_config_result.config)),
       .command_ingress = nullptr,
       .state_egress = nullptr,
+      .observation_hook = create_observation_hook(startup_config),
   };
 
   dds::DdsAssembly dds_assembly =
@@ -213,11 +336,14 @@ struct RobotFactoryEntry {
 
 [[nodiscard]] const std::vector<RobotFactoryEntry>& factory_entries() {
   static const std::vector<RobotFactoryEntry> entries{
-#if defined(BRIDGE_BUILD_KEPLER_K2)
+#if BRIDGE_BUILD_KEPLER_K2
       {.robot_type = "kepler_k2", .create = &create_kepler_k2_assembly},
 #endif
-#if defined(BRIDGE_BUILD_PM01)
+#if BRIDGE_BUILD_PM01
       {.robot_type = "pm01", .create = &create_pm01_assembly},
+#endif
+#if BRIDGE_BUILD_UNITREE_G1
+      {.robot_type = "unitree_g1", .create = &create_unitree_g1_assembly},
 #endif
   };
   return entries;

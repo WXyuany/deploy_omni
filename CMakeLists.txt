@@ -4,9 +4,10 @@ project(adapter_any_robot LANGUAGES CXX)
 
 option(BUILD_ROBOT_KEPLER_K2 "Build kepler_k2 adapter support" ON)
 option(BUILD_ROBOT_PM01 "Build pm01 adapter support" ON)
+option(BUILD_ROBOT_UNITREE_G1 "Build unitree_g1 adapter support" ON)
 
-if(NOT BUILD_ROBOT_KEPLER_K2 AND NOT BUILD_ROBOT_PM01)
-  message(FATAL_ERROR "At least one robot adapter must be enabled. Set BUILD_ROBOT_KEPLER_K2 or BUILD_ROBOT_PM01 to ON.")
+if(NOT BUILD_ROBOT_KEPLER_K2 AND NOT BUILD_ROBOT_PM01 AND NOT BUILD_ROBOT_UNITREE_G1)
+  message(FATAL_ERROR "At least one robot adapter must be enabled. Set BUILD_ROBOT_KEPLER_K2, BUILD_ROBOT_PM01, or BUILD_ROBOT_UNITREE_G1 to ON.")
 endif()
 
 set(BRIDGE_BUILD_KEPLER_K2 0)
@@ -17,6 +18,11 @@ endif()
 set(BRIDGE_BUILD_PM01 0)
 if(BUILD_ROBOT_PM01)
   set(BRIDGE_BUILD_PM01 1)
+endif()
+
+set(BRIDGE_BUILD_UNITREE_G1 0)
+if(BUILD_ROBOT_UNITREE_G1)
+  set(BRIDGE_BUILD_UNITREE_G1 1)
 endif()
 
 set(BRIDGE_PM01_REAL_BACKEND_AVAILABLE 0)
@@ -278,8 +284,21 @@ if(BUILD_ROBOT_PM01)
   endif()
 endif()
 
+if(BUILD_ROBOT_UNITREE_G1)
+  add_library(bridge_adapter_unitree_g1 STATIC
+    src/bridge/adapters/unitree_g1/unitree_g1_low_level_protocol.cpp
+    src/bridge/adapters/unitree_g1/unitree_g1_adapter.cpp
+    src/bridge/adapters/unitree_g1/unitree_g1_low_level_session.cpp
+  )
+  target_link_libraries(bridge_adapter_unitree_g1 PUBLIC
+    bridge_project_options
+    bridge_cyclonedds_options)
+  add_dependencies(bridge_adapter_unitree_g1 unitree_sdk2_nomain)
+endif()
+
 add_library(bridge_extensions STATIC
   src/bridge/extensions/legacy_kepler_hooks.cpp
+  src/bridge/extensions/terminal_observation_hook.cpp
 )
 target_link_libraries(bridge_extensions PUBLIC bridge_project_options bridge_core)
 
@@ -299,6 +318,9 @@ endif()
 if(BUILD_ROBOT_PM01)
   target_link_libraries(bridge_app_support PUBLIC bridge_adapter_pm01)
 endif()
+if(BUILD_ROBOT_UNITREE_G1)
+  target_link_libraries(bridge_app_support PUBLIC bridge_adapter_unitree_g1)
+endif()
 
 add_executable(adapter_bridge
   src/apps/adapter_bridge_main.cpp
@@ -308,6 +330,7 @@ target_link_libraries(adapter_bridge PRIVATE
   bridge_core
   bridge_config
   bridge_app_support
+  bridge_extensions
 )
 set_target_properties(adapter_bridge PROPERTIES
   BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
@@ -331,6 +354,11 @@ if(BUILD_TESTING)
     bridge_dds_codecs
   )
 
+  bridge_add_test(runner_frequency_log_test
+    tests/core/runner_frequency_log_test.cpp
+    bridge_project_options
+  )
+
   bridge_add_test(fake_adapter_compile_test
     tests/core/fake_adapter_compile_test.cpp
     bridge_project_options
@@ -344,6 +372,12 @@ if(BUILD_TESTING)
 
   bridge_add_test(bridge_config_test
     tests/config/bridge_config_test.cpp
+    bridge_project_options
+    bridge_config
+  )
+
+  bridge_add_test(g1_bridge_config_test
+    tests/config/g1_bridge_config_test.cpp
     bridge_project_options
     bridge_config
   )
@@ -412,6 +446,26 @@ if(BUILD_TESTING)
     endif()
   endif()
 
+  if(BUILD_ROBOT_UNITREE_G1)
+    bridge_add_test(unitree_g1_adapter_test
+      tests/adapters/unitree_g1_adapter_test.cpp
+      bridge_project_options
+      bridge_adapter_unitree_g1
+    )
+
+    bridge_add_test(unitree_g1_low_level_session_test
+      tests/adapters/unitree_g1_low_level_session_test.cpp
+      bridge_project_options
+      bridge_adapter_unitree_g1
+    )
+
+    bridge_add_test(unitree_g1_low_level_protocol_test
+      tests/adapters/unitree_g1_low_level_protocol_test.cpp
+      bridge_project_options
+      bridge_adapter_unitree_g1
+    )
+  endif()
+
   bridge_add_test(hooks_isolation_test
     tests/extensions/hooks_isolation_test.cpp
     bridge_project_options
@@ -424,9 +478,24 @@ if(BUILD_TESTING)
     bridge_core
     bridge_config
     bridge_app_support
+    bridge_extensions
   )
   target_compile_definitions(robot_assembly_factory_test PRIVATE
     BRIDGE_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
   )
+
+  if(BUILD_ROBOT_UNITREE_G1)
+    bridge_add_test(g1_robot_assembly_test
+      tests/apps/g1_robot_assembly_test.cpp
+      bridge_project_options
+      bridge_core
+      bridge_config
+      bridge_app_support
+      bridge_extensions
+    )
+    target_compile_definitions(g1_robot_assembly_test PRIVATE
+      BRIDGE_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+  endif()
 
 endif()

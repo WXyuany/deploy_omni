@@ -1,0 +1,119 @@
+#pragma once
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <unitree/idl/hg/IMUState_.hpp>
+#include <unitree/idl/hg/LowCmd_.hpp>
+#include <unitree/idl/hg/LowState_.hpp>
+#include <unitree/robot/b2/motion_switcher/motion_switcher_client.hpp>
+#include <unitree/robot/channel/channel_publisher.hpp>
+#include <unitree/robot/channel/channel_subscriber.hpp>
+
+#include "../../core/types.hpp"
+
+namespace bridge::adapters::unitree_g1 {
+
+struct LowLevelSessionConfig {
+  std::string transport_mode;
+  std::string robot_id;
+  std::string transport_endpoint;
+  std::string control_profile;
+  std::string command_topic;
+  std::string state_topic;
+  std::string imu_topic;
+  std::uint64_t initialize_timeout_ns{0};
+  std::uint64_t read_timeout_ns{0};
+  std::uint64_t write_timeout_ns{0};
+  std::uint64_t stale_state_after_ns{0};
+  bool require_motion_release{true};
+  bool verify_low_state_crc{false};
+  std::size_t hardware_slot_count{0};
+  std::function<int32_t(std::string&, std::string&)> check_mode_hook;
+  std::function<int32_t()> release_mode_hook;
+};
+
+struct LowLevelSessionState {
+  std::uint64_t sample_time_ns{0};
+  std::uint8_t mode_pr{0};
+  std::uint8_t mode_machine{0};
+  bool valid{false};
+  bool stale{false};
+  bool degraded{false};
+  std::vector<double> position;
+  std::vector<double> velocity;
+  std::vector<double> effort;
+  std::vector<double> acceleration;
+  std::optional<bridge::core::ImuSample> imu;
+  std::optional<bridge::core::BridgeFault> fault;
+};
+
+struct LowLevelSessionReadResult {
+  bridge::core::AdapterCallResult result;
+  std::optional<LowLevelSessionState> state;
+};
+
+class UnitreeG1LowLevelSession {
+ public:
+  explicit UnitreeG1LowLevelSession(LowLevelSessionConfig config);
+
+  [[nodiscard]] const LowLevelSessionConfig& config() const noexcept;
+  [[nodiscard]] bridge::core::AdapterCallResult initialize();
+  [[nodiscard]] LowLevelSessionReadResult read_state();
+  void handle_low_state_message(const unitree_hg::msg::dds_::LowState_& state);
+  void handle_imu_message(const unitree_hg::msg::dds_::IMUState_& imu);
+  void handle_low_state_message(const void* message);
+  void handle_imu_message(const void* message);
+  [[nodiscard]] const std::optional<unitree_hg::msg::dds_::LowCmd_>& last_packed_command()
+      const noexcept;
+  [[nodiscard]] bridge::core::AdapterCallResult write_command(
+      const bridge::core::CommandFrame& command);
+  [[nodiscard]] bridge::core::AdapterCallResult write_safe_command();
+  [[nodiscard]] bridge::core::AdapterHealth health() const;
+  [[nodiscard]] bridge::core::AdapterCallResult shutdown();
+
+ private:
+  LowLevelSessionConfig config_;
+  std::uint64_t synthetic_time_ns_{0};
+  bool initialized_{false};
+  bool released_motion_{false};
+  bool has_state_{false};
+  std::atomic<bool> connection_alive_{false};
+  std::uint8_t mode_pr_{0};
+  std::uint8_t mode_machine_{0};
+  std::uint64_t last_low_state_time_ns_{0};
+  std::uint64_t last_read_time_ns_{0};
+  std::uint64_t last_write_time_ns_{0};
+  std::optional<unitree_hg::msg::dds_::LowCmd_> last_packed_command_;
+  std::optional<unitree_hg::msg::dds_::LowState_> latest_low_state_;
+  std::optional<unitree_hg::msg::dds_::IMUState_> latest_imu_state_;
+  std::shared_ptr<unitree::robot::ChannelPublisher<unitree_hg::msg::dds_::LowCmd_>>
+      lowcmd_publisher_;
+  std::shared_ptr<unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowState_>>
+      lowstate_subscriber_;
+  std::shared_ptr<unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::IMUState_>>
+      imu_subscriber_;
+  std::shared_ptr<unitree::robot::b2::MotionSwitcherClient> motion_switcher_client_;
+
+  void writer_loop();
+  std::thread writer_thread_;
+  std::atomic<bool> stop_writer_{false};
+  std::atomic<bool> writer_started_{false};
+  std::mutex cmd_mutex_;
+  std::optional<unitree_hg::msg::dds_::LowCmd_> pending_cmd_;
+
+  std::vector<double> position_;
+  std::vector<double> velocity_;
+  std::vector<double> effort_;
+  std::vector<double> acceleration_;
+};
+
+}  // namespace bridge::adapters::unitree_g1

@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include <unitree/dds_wrapper/common/crc.h>
+
 #include "unitree/idl/hg/LowCmd_.hpp"
 #include "unitree/idl/hg/LowState_.hpp"
 
@@ -77,6 +79,7 @@ JointMap MakeJointMapWithDisabledHighestSlot() {
 
 LowCmd_ MakeLowCmd() {
   LowCmd_ message;
+  message.mode_pr(9U);
   message.mode_machine(5U);
   auto reserve = message.reserve();
   reserve[0] = 12U;
@@ -95,7 +98,14 @@ LowCmd_ MakeLowCmd() {
   motors[1].kp(8.0F);
   motors[1].kd(10.0F);
   message.motor_cmd(motors);
+  message.crc() = crc32_core(reinterpret_cast<uint32_t*>(&message),
+                             (sizeof(message) >> 2) - 1);
   return message;
+}
+
+void RecomputeLowCmdCrc(LowCmd_& message) {
+  message.crc() = crc32_core(reinterpret_cast<uint32_t*>(&message),
+                             (sizeof(message) >> 2) - 1);
 }
 
 StateFrame MakeHardwareState() {
@@ -103,6 +113,8 @@ StateFrame MakeHardwareState() {
   state.sequence = 20U;
   state.sample_time_ns = 1000U;
   state.publish_time_ns = 1010U;
+  state.mode_pr = 9U;
+  state.mode_machine = 5U;
   state.lifecycle_state = LifecycleState::kActive;
   state.active_mode = ControlMode::kTorque;
   state.mode_label = "torque_mode";
@@ -122,6 +134,15 @@ StateFrame MakeHardwareState() {
       .sequence = 9U,
       .timestamp_ns = 2000U,
   };
+  state.imu = bridge::core::ImuSample{
+      .sample_time_ns = 1005U,
+      .valid = true,
+      .stale = false,
+      .orientation_xyzw = {0.2, 0.3, 0.4, 0.5},
+      .rpy_xyz = {0.6, 0.7, 0.8},
+      .angular_velocity_xyz = {0.1, 0.2, 0.3},
+      .linear_acceleration_xyz = {9.1, 9.2, 9.3},
+  };
   return state;
 }
 
@@ -132,6 +153,8 @@ void TestTranslateLowCmdToCommand() {
   assert(translated.command->sequence == 12U);
   assert(translated.command->source_time_ns == 345U);
   assert(translated.command->receive_time_ns == 400U);
+  assert(translated.command->mode_pr == 9U);
+  assert(translated.command->mode_machine == 5U);
   assert(translated.command->mode == ControlMode::kHybrid);
   assert(translated.command->joints.position.size() == 35U);
   assert(translated.command->joints.position[0] == 1.0);
@@ -146,6 +169,8 @@ void TestTranslateLowCmdToHardwareCommandThroughJointMap() {
       translate_lowcmd_to_hardware_command(MakeLowCmd(), 400U, MakeSwappingJointMap());
   assert(translated.result.succeeded());
   assert(translated.command.has_value());
+  assert(translated.command->mode_pr == 9U);
+  assert(translated.command->mode_machine == 5U);
   assert(translated.command->joints.position.size() == 2U);
   assert(translated.command->joints.position[0] == 2.0);
   assert(translated.command->joints.position[1] == 1.0);
@@ -159,11 +184,19 @@ void TestTranslateHardwareStateToLowStateThroughJointMap() {
   assert(translated.result.succeeded());
   assert(translated.state.has_value());
   assert(translated.state->tick() == 20U);
-  assert(translated.state->mode_machine() == 2U);
+  assert(translated.state->mode_pr() == 9U);
+  assert(translated.state->mode_machine() == 5U);
   assert(translated.state->motor_state()[0].q() == 22.0F);
   assert(translated.state->motor_state()[1].q() == 11.0F);
   assert(translated.state->motor_state()[0].tau_est() == 66.0F);
   assert(translated.state->motor_state()[1].tau_est() == 55.0F);
+  assert(translated.state->imu_state().quaternion()[0] == 0.5F);
+  assert(translated.state->imu_state().quaternion()[1] == 0.2F);
+  assert(translated.state->imu_state().quaternion()[2] == 0.3F);
+  assert(translated.state->imu_state().quaternion()[3] == 0.4F);
+  assert(translated.state->imu_state().rpy()[0] == 0.6F);
+  assert(translated.state->imu_state().rpy()[1] == 0.7F);
+  assert(translated.state->imu_state().rpy()[2] == 0.8F);
 }
 
 void TestRejectsLowCmdWithNonFiniteValues() {
@@ -171,6 +204,18 @@ void TestRejectsLowCmdWithNonFiniteValues() {
   auto motors = message.motor_cmd();
   motors[1].dq(std::nan(""));
   message.motor_cmd(motors);
+  RecomputeLowCmdCrc(message);
+
+  const auto translated = translate_lowcmd_to_command(message, 400U);
+  assert(!translated.result.succeeded());
+  assert(!translated.command.has_value());
+  assert(translated.result.fault.has_value());
+  assert(translated.result.fault->category == bridge::core::FaultCategory::kInvalidCommand);
+}
+
+void TestRejectsLowCmdWithInvalidCrc() {
+  auto message = MakeLowCmd();
+  message.crc(message.crc() + 1U);
 
   const auto translated = translate_lowcmd_to_command(message, 400U);
   assert(!translated.result.succeeded());
@@ -186,6 +231,7 @@ void TestRejectsStateWithInvalidImuVectorWidths() {
       .valid = true,
       .stale = false,
       .orientation_xyzw = {0.0, 0.0, 1.0},
+      .rpy_xyz = {0.0, 0.0, 0.0},
       .angular_velocity_xyz = {0.1, 0.2, 0.3},
       .linear_acceleration_xyz = {0.0, 0.0, 9.81},
   };
@@ -215,23 +261,21 @@ void TestDisabledJointSlotsRemainZeroInDdsTranslations() {
   motors[2].kp(6.0F);
   motors[2].kd(7.0F);
   message.motor_cmd(motors);
+  RecomputeLowCmdCrc(message);
 
   const auto command = translate_lowcmd_to_hardware_command(
       message, 400U, MakeJointMapWithDisabledHighestSlot());
   assert(command.result.succeeded());
   assert(command.command.has_value());
-  assert(command.command->joints.position.size() == 3U);
-  assert(command.command->joints.position[2] == 0.0);
-  assert(command.command->joints.velocity[2] == 0.0);
-  assert(command.command->joints.effort[2] == 0.0);
-  assert(command.command->joints.stiffness[2] == 0.0);
-  assert(command.command->joints.damping[2] == 0.0);
+  assert(command.command->joints.position.size() == 2U);
+  assert(command.command->joints.position[0] == 1.0);
+  assert(command.command->joints.position[1] == 9.0);
 
   auto state = MakeHardwareState();
-  state.joints.position = {11.0, 999.0, 33.0};
-  state.joints.velocity = {44.0, 999.0, 66.0};
-  state.joints.effort = {77.0, 999.0, 88.0};
-  state.joints.acceleration = {12.0, 999.0, 34.0};
+  state.joints.position = {11.0, 999.0};
+  state.joints.velocity = {44.0, 999.0};
+  state.joints.effort = {77.0, 999.0};
+  state.joints.acceleration = {12.0, 999.0};
 
   const auto lowstate =
       translate_hardware_state_to_lowstate(state, MakeJointMapWithDisabledHighestSlot());
@@ -250,6 +294,7 @@ int main() {
   TestTranslateLowCmdToHardwareCommandThroughJointMap();
   TestTranslateHardwareStateToLowStateThroughJointMap();
   TestRejectsLowCmdWithNonFiniteValues();
+  TestRejectsLowCmdWithInvalidCrc();
   TestRejectsStateWithInvalidImuVectorWidths();
   TestDisabledJointSlotsRemainZeroInDdsTranslations();
   return 0;

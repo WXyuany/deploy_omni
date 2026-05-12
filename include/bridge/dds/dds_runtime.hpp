@@ -11,6 +11,7 @@ struct DdsRuntimeConfig {
   std::string command_topic{"bridge/command"};
   std::string state_topic{"bridge/state"};
   std::string status_topic{"bridge/status"};
+  std::string network_interface;
 };
 
 struct DdsRuntimeImpl;

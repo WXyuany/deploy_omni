@@ -11,6 +11,7 @@ DdsAssembly create_dds_assembly(const config::BridgeStartupConfig& startup_confi
       .command_topic = startup_config.dds.topics.command,
       .state_topic = startup_config.dds.topics.state,
       .status_topic = startup_config.dds.topics.status,
+      .network_interface = startup_config.adapter.connection.interface_hint,
   });
 
   DdsAssembly assembly;

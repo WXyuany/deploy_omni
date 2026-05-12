@@ -43,8 +43,20 @@ std::shared_ptr<DdsRuntime> make_dds_runtime(DdsRuntimeConfig config) {
   runtime->config = std::move(config);
   DdsRuntimeImpl& impl = runtime_impl(*runtime);
 
-  unitree::robot::ChannelFactory::Instance()->Init(
-      static_cast<int32_t>(runtime->config.domain_id));
+  try {
+    if (runtime->config.network_interface.empty()) {
+      unitree::robot::ChannelFactory::Instance()->Init(
+          static_cast<int32_t>(runtime->config.domain_id));
+    } else {
+      unitree::robot::ChannelFactory::Instance()->Init(
+          static_cast<int32_t>(runtime->config.domain_id),
+          runtime->config.network_interface);
+    }
+  } catch (...) {
+    runtime->config.network_interface.clear();
+    unitree::robot::ChannelFactory::Instance()->Init(
+        static_cast<int32_t>(runtime->config.domain_id));
+  }
   impl.initialized = true;
   impl.command_channel_available = true;
   impl.state_channel_available = true;
