@@ -5,6 +5,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "bridge/build_config.hpp"
 #include "../../include/bridge/adapters/pm01/pm01_adapter.hpp"
 
 namespace {
@@ -30,7 +31,7 @@ static_assert(!HasPublicUpdateMotionTask<Pm01Adapter>::value);
 Pm01AdapterConfig MakeBaseConfig() {
   Pm01AdapterConfig config;
   config.session.robot_id = "pm01-test";
-  config.session.transport_address = "dds:pm01";
+  config.session.transport_endpoint = "dds:pm01";
   config.session.control_profile = "joint_bridge";
   config.session.initialize_timeout_ns = 10;
   config.session.read_timeout_ns = 20;
@@ -62,6 +63,8 @@ bridge::core::CommandFrame MakeCommand(const ControlMode mode) {
   command.sequence = 1;
   command.source_time_ns = 100;
   command.receive_time_ns = 110;
+  command.mode_pr = 7U;
+  command.mode_machine = mode == ControlMode::kSafeIdle ? 1U : 4U;
   command.mode = mode;
   command.mode_label = mode == ControlMode::kSafeIdle ? "safe_idle" : "position";
   command.valid = true;
@@ -154,8 +157,31 @@ void TestReadStateProvidesDefaultImuWhenUnavailable() {
   assert(!read.state->imu->valid);
   assert(read.state->imu->stale);
   assert(read.state->imu->orientation_xyzw.size() == 4U);
+  assert(read.state->imu->rpy_xyz.size() == 3U);
+  assert(read.state->imu->rpy_xyz[0] == 0.0);
+  assert(read.state->imu->rpy_xyz[1] == 0.0);
+  assert(read.state->imu->rpy_xyz[2] == 0.0);
   assert(read.state->imu->orientation_xyzw[3] == 1.0);
   assert(read.state->joints.position.size() == 24U);
+}
+
+void TestReadStateEchoesRawDdsModeBytes() {
+  Pm01AdapterConfig config = MakeBaseConfig();
+  config.motion_state.initial_task = "joint_bridge";
+  Pm01Adapter adapter(config);
+  assert(adapter.initialize().status == AdapterCallStatus::kOk);
+  assert(adapter.read_state().result.status == AdapterCallStatus::kOk);
+
+  auto command = MakeCommand(ControlMode::kPosition);
+  command.mode_pr = 11U;
+  command.mode_machine = 4U;
+  assert(adapter.write_command(command).status == AdapterCallStatus::kOk);
+
+  const auto read = adapter.read_state();
+  assert(read.result.status == AdapterCallStatus::kOk);
+  assert(read.state.has_value());
+  assert(read.state->mode_pr == 11U);
+  assert(read.state->mode_machine == 4U);
 }
 
 void TestSafeCommandUnsupportedReportsCapability() {
@@ -174,7 +200,7 @@ void TestSafeCommandUnsupportedReportsCapability() {
   assert(health.health.connection_alive);
 }
 
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
 void TestRos2BackendCanInitializeAndShutdown() {
   Pm01AdapterConfig config = MakeBaseConfig();
   config.backend = "ros2";
@@ -194,12 +220,23 @@ void TestRos2BackendCanInitializeAndShutdown() {
 void TestLegacyRos2TransportAddressStillWorks() {
   Pm01AdapterConfig config = MakeBaseConfig();
   config.backend.clear();
-  config.session.transport_address = "ros2:pm01";
+  config.session.transport_endpoint = "ros2:pm01";
 
   Pm01Adapter adapter(config);
   const auto init = adapter.initialize();
   assert(init.status == AdapterCallStatus::kOk);
   assert(adapter.shutdown().status == AdapterCallStatus::kOk);
+}
+
+void TestRos2BackendCanBeDestroyedWithoutExplicitShutdown() {
+  Pm01AdapterConfig config = MakeBaseConfig();
+  config.backend = "ros2";
+
+  {
+    Pm01Adapter adapter(config);
+    const auto init = adapter.initialize();
+    assert(init.status == AdapterCallStatus::kOk);
+  }
 }
 #endif
 
@@ -212,10 +249,12 @@ int main() {
   TestInitialMotionTaskAllowsConfiguredMotionWrite();
   TestDdsJointIndicesDriveReadbackProjection();
   TestReadStateProvidesDefaultImuWhenUnavailable();
+  TestReadStateEchoesRawDdsModeBytes();
   TestSafeCommandUnsupportedReportsCapability();
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
   TestRos2BackendCanInitializeAndShutdown();
   TestLegacyRos2TransportAddressStillWorks();
+  TestRos2BackendCanBeDestroyedWithoutExplicitShutdown();
 #endif
   return 0;
 }

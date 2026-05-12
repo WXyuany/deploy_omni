@@ -30,7 +30,9 @@ struct BridgeConfigIssue {
 };
 
 struct AdapterConnectionConfig {
+  // 前缀是通信方式，例如 udp / dds / ros2。
   std::string transport;
+  // 后缀是端点提示；与 transport 组合后会形成 transport_endpoint。
   std::string interface_hint;
 };
 
@@ -44,6 +46,12 @@ struct AdapterSafetyPolicyConfig {
   bool allow_safe_command_during_shutdown{true};
 };
 
+struct AdapterMotionStateConfig {
+  bool required{true};
+  std::string required_task{"joint_bridge"};
+  std::optional<std::string> initial_task;
+};
+
 struct RobotAdapterConfig {
   std::string kind;
   std::string robot_name;
@@ -53,6 +61,7 @@ struct RobotAdapterConfig {
   AdapterConnectionConfig connection;
   AdapterStartupPolicyConfig startup;
   AdapterSafetyPolicyConfig safety;
+  AdapterMotionStateConfig motion_state;
   std::vector<std::string> joint_names;
 
   [[nodiscard]] std::size_t joint_count() const noexcept {
@@ -75,11 +84,22 @@ struct DdsConfig {
   };
 };
 
+struct DebugPrintConfig {
+  bool state{false};
+  bool command{false};
+  std::uint32_t rate_hz{0};
+
+  [[nodiscard]] bool enabled() const noexcept {
+    return state || command;
+  }
+};
+
 struct BridgeStartupConfig {
   std::string source_path;
   std::string robot_type;
   core::BridgeRunnerConfig runner;
   DdsConfig dds;
+  DebugPrintConfig debug_print;
   RobotAdapterConfig adapter;
   JointMapValidationOptions joint_map_validation;
   std::vector<JointMapEntry> joint_map_entries;

@@ -4,7 +4,9 @@
 #include <string>
 #include <vector>
 
+#include "bridge/build_config.hpp"
 #include "../../include/bridge/app/robot_assembly_factory.hpp"
+#include "../../include/bridge/adapters/pm01/pm01_adapter.hpp"
 #include "../../include/bridge/config/bridge_config.hpp"
 #include "../../include/bridge/core/bridge_runner.hpp"
 
@@ -105,7 +107,7 @@ std::string WritePm01Config(const std::string& path) {
 }
 
 void TestCreatesKeplerAssemblyFromSampleConfig() {
-#if defined(BRIDGE_BUILD_KEPLER_K2)
+#if BRIDGE_BUILD_KEPLER_K2
   const bridge::config::BridgeConfigLoadResult loaded = LoadSampleConfig();
   assert(loaded.succeeded());
   assert(loaded.config.has_value());
@@ -143,7 +145,7 @@ void TestRejectsUnsupportedRobotType() {
 void TestRegisteredRobotTypesIncludesPm01() {
   const std::vector<std::string_view> types =
       bridge::app::registered_robot_types();
-#if defined(BRIDGE_BUILD_PM01)
+#if BRIDGE_BUILD_PM01
   assert(std::find(types.begin(), types.end(), std::string_view{"pm01"}) !=
          types.end());
 #else
@@ -153,7 +155,7 @@ void TestRegisteredRobotTypesIncludesPm01() {
 }
 
 void TestCreatesPm01AssemblyFromConfig() {
-#if defined(BRIDGE_BUILD_PM01)
+#if BRIDGE_BUILD_PM01
   const std::string path = WritePm01Config("pm01_robot_assembly_test.yaml");
   const bridge::config::BridgeConfigLoadResult loaded =
       bridge::config::load_bridge_config(path);
@@ -169,10 +171,70 @@ void TestCreatesPm01AssemblyFromConfig() {
 #endif
 }
 
+void TestPm01AssemblyPropagatesBackendField() {
+#if BRIDGE_BUILD_PM01
+  const std::string path = WritePm01Config("pm01_robot_assembly_backend_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "adapter:\n"
+           << "  backend: ros2\n";
+  }
+
+  const bridge::config::BridgeConfigLoadResult loaded =
+      bridge::config::load_bridge_config(path);
+  assert(loaded.succeeded());
+  assert(loaded.config.has_value());
+
+  bridge::app::RobotAssemblyCreateResult assembled =
+      bridge::app::create_robot_assembly(*loaded.config);
+  assert(assembled.succeeded());
+  assert(assembled.assembly.has_value());
+  assert(assembled.assembly->adapter != nullptr);
+
+  const auto* pm01 = dynamic_cast<bridge::adapters::pm01::Pm01Adapter*>(
+      assembled.assembly->adapter.get());
+  assert(pm01 != nullptr);
+  assert(pm01->config().backend == "ros2");
+#endif
+}
+
+void TestPm01AssemblyPropagatesMotionStateConfig() {
+#if BRIDGE_BUILD_PM01
+  const std::string path = WritePm01Config("pm01_robot_assembly_motion_state_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "adapter:\n"
+           << "  motion_state:\n"
+           << "    required: true\n"
+           << "    required_task: passive\n"
+           << "    initial_task: idle\n";
+  }
+
+  const bridge::config::BridgeConfigLoadResult loaded =
+      bridge::config::load_bridge_config(path);
+  assert(loaded.succeeded());
+  assert(loaded.config.has_value());
+
+  bridge::app::RobotAssemblyCreateResult assembled =
+      bridge::app::create_robot_assembly(*loaded.config);
+  assert(assembled.succeeded());
+  assert(assembled.assembly.has_value());
+  assert(assembled.assembly->adapter != nullptr);
+
+  const auto* pm01 = dynamic_cast<bridge::adapters::pm01::Pm01Adapter*>(
+      assembled.assembly->adapter.get());
+  assert(pm01 != nullptr);
+  assert(pm01->config().motion_state.required);
+  assert(pm01->config().motion_state.required_task == "passive");
+  assert(pm01->config().motion_state.initial_task.has_value());
+  assert(*pm01->config().motion_state.initial_task == "idle");
+#endif
+}
+
 void TestRegisteredRobotTypesIncludesKeplerK2() {
   const std::vector<std::string_view> types =
       bridge::app::registered_robot_types();
-#if defined(BRIDGE_BUILD_KEPLER_K2)
+#if BRIDGE_BUILD_KEPLER_K2
   assert(std::find(types.begin(), types.end(), std::string_view{"kepler_k2"}) !=
          types.end());
 #else
@@ -189,5 +251,7 @@ int main() {
   TestRegisteredRobotTypesIncludesKeplerK2();
   TestRegisteredRobotTypesIncludesPm01();
   TestCreatesPm01AssemblyFromConfig();
+  TestPm01AssemblyPropagatesBackendField();
+  TestPm01AssemblyPropagatesMotionStateConfig();
   return 0;
 }

@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -7,6 +8,7 @@
 #include <vector>
 
 #include "../../include/bridge/core/bridge_runner.hpp"
+#include "../../include/bridge/extensions/hooks.hpp"
 
 namespace {
 
@@ -34,6 +36,8 @@ using bridge::core::RunnerCallResult;
 using bridge::core::RunnerCallStatus;
 using bridge::core::StartupIdlePolicy;
 using bridge::core::StateFrame;
+using bridge::extensions::HookInvocationContext;
+using bridge::extensions::ObservationHook;
 
 CommandFrame MakeCommand(const std::uint64_t sequence,
                          const std::uint64_t receive_time_ns,
@@ -73,6 +77,10 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
   explicit FakeRobotSdkAdapter(std::vector<StateFrame> states)
       : states_(std::move(states)) {}
 
+  void push_read_result(AdapterReadResult read_result) {
+    queued_read_results_.push_back(std::move(read_result));
+  }
+
   [[nodiscard]] std::string_view name() const noexcept override {
     return "fake_runner_adapter";
   }
@@ -87,6 +95,11 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
 
   [[nodiscard]] AdapterReadResult read_state() override {
     read_count_ += 1;
+    if (!queued_read_results_.empty()) {
+      AdapterReadResult result = std::move(queued_read_results_.front());
+      queued_read_results_.erase(queued_read_results_.begin());
+      return result;
+    }
     assert(read_index_ < states_.size());
     return {
         .result = {.status = AdapterCallStatus::kOk,
@@ -146,6 +159,7 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
 
  private:
   std::vector<StateFrame> states_;
+  std::vector<AdapterReadResult> queued_read_results_;
   std::size_t read_index_{0};
   bool initialized_{false};
   int initialize_count_{0};
@@ -255,6 +269,48 @@ class FakeStateEgress final : public BridgeStateEgress {
   int publish_count_{0};
   int stop_count_{0};
   std::vector<StateFrame> published_states_;
+};
+
+class FakeObservationHook final : public ObservationHook {
+ public:
+  void observe_command(const CommandFrame& command,
+                       const HookInvocationContext& context) override {
+    observed_command_sequences_.push_back(command.sequence);
+    observed_command_cycles_.push_back(context.cycle_index);
+  }
+
+  void observe_state(const StateFrame& state,
+                     const HookInvocationContext& context) override {
+    observed_state_sequences_.push_back(state.sequence);
+    observed_state_cycles_.push_back(context.cycle_index);
+  }
+
+  void observe_debug(std::string_view, const HookInvocationContext&) override {}
+
+  [[nodiscard]] const std::vector<bridge::extensions::ObservationRecord>& records()
+      const noexcept override {
+    return records_;
+  }
+
+  [[nodiscard]] const std::vector<std::uint64_t>& observed_command_sequences() const noexcept {
+    return observed_command_sequences_;
+  }
+  [[nodiscard]] const std::vector<std::uint64_t>& observed_state_sequences() const noexcept {
+    return observed_state_sequences_;
+  }
+  [[nodiscard]] const std::vector<std::uint64_t>& observed_command_cycles() const noexcept {
+    return observed_command_cycles_;
+  }
+  [[nodiscard]] const std::vector<std::uint64_t>& observed_state_cycles() const noexcept {
+    return observed_state_cycles_;
+  }
+
+ private:
+  std::vector<bridge::extensions::ObservationRecord> records_;
+  std::vector<std::uint64_t> observed_command_sequences_;
+  std::vector<std::uint64_t> observed_state_sequences_;
+  std::vector<std::uint64_t> observed_command_cycles_;
+  std::vector<std::uint64_t> observed_state_cycles_;
 };
 
 BridgeRunnerConfig MakeConfig() {
@@ -394,10 +450,71 @@ void TestStaleCommandTriggersFailStop() {
   assert(runner.status().lifecycle_state == LifecycleState::kStopped);
 }
 
+void TestWaitingForInitialStateDoesNotFailStopRunner() {
+  FakeRobotSdkAdapter adapter({MakeState(1, 100, 100)});
+  adapter.push_read_result({
+      .result = {.status = AdapterCallStatus::kRetryableError,
+                 .detail = "waiting for /hardware/joint_state",
+                 .fault = std::nullopt},
+      .state = std::nullopt,
+  });
+  FakeCommandIngress ingress;
+  FakeStateEgress egress;
+  BridgeRunner runner(MakeConfig(), {.adapter = &adapter,
+                                     .command_ingress = &ingress,
+                                     .state_egress = &egress});
+
+  const RunnerCallResult initialize = runner.initialize();
+  assert(initialize.succeeded());
+
+  const RunnerCallResult waiting_run = runner.run();
+  assert(waiting_run.succeeded());
+  assert(waiting_run.detail == "waiting for /hardware/joint_state");
+
+  const BridgeRunnerStatus waiting = runner.status();
+  assert(waiting.lifecycle_state == LifecycleState::kWaitingForState);
+  assert(!waiting.first_state_received);
+  assert(!waiting.fail_stop_active);
+  assert(!waiting.latched_fault.has_value());
+  assert(adapter.write_command_count() == 0);
+  assert(adapter.write_safe_command_count() == 0);
+  assert(egress.publish_count() == 0);
+
+  const RunnerCallResult active_run = runner.run();
+  assert(active_run.succeeded());
+  assert(runner.status().lifecycle_state == LifecycleState::kActive);
+  assert(runner.status().first_state_received);
+
+  const RunnerCallResult shutdown = runner.shutdown();
+  assert(shutdown.succeeded());
+}
+
+void TestObservationHookSeesPublishedStateAndEffectiveCommand() {
+  FakeRobotSdkAdapter adapter({MakeState(1, 100, 100)});
+  FakeCommandIngress ingress;
+  FakeStateEgress egress;
+  FakeObservationHook observation;
+  BridgeRunner runner(MakeConfig(), {.adapter = &adapter,
+                                     .command_ingress = &ingress,
+                                     .state_egress = &egress,
+                                     .observation_hook = &observation});
+
+  assert(runner.initialize().succeeded());
+  assert(ingress.submit_from_callback(MakeCommand(11, 90, ControlMode::kTorque)).result.succeeded());
+  assert(runner.run().succeeded());
+
+  assert(observation.observed_state_sequences() == std::vector<std::uint64_t>({1}));
+  assert(observation.observed_command_sequences() == std::vector<std::uint64_t>({11}));
+  assert(observation.observed_state_cycles() == std::vector<std::uint64_t>({1}));
+  assert(observation.observed_command_cycles() == std::vector<std::uint64_t>({1}));
+}
+
 }
 
 int main() {
   TestHappyPathLifecycleProgression();
   TestStaleCommandTriggersFailStop();
+  TestWaitingForInitialStateDoesNotFailStopRunner();
+  TestObservationHookSeesPublishedStateAndEffectiveCommand();
   return 0;
 }

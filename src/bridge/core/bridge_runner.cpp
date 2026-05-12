@@ -1,10 +1,13 @@
 #include "../../../include/bridge/core/bridge_runner.hpp"
 
+#include <cstdio>
 #include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
+
+#include "../../../include/bridge/extensions/hooks.hpp"
 
 namespace bridge::core {
 namespace {
@@ -25,6 +28,11 @@ namespace {
   }
 
   return RunnerCallStatus::kFatalError;
+}
+
+[[nodiscard]] bool is_waiting_for_initial_state_detail(
+    const std::string& detail) noexcept {
+  return detail.rfind("waiting for ", 0) == 0;
 }
 
 [[nodiscard]] BridgeFault make_fault(const FaultCategory category,
@@ -200,6 +208,14 @@ class BridgeRunner::Impl {
     AdapterReadResult read_result = dependencies_.adapter->read_state();
     if (!read_result.result.succeeded()) {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (status_.lifecycle_state == LifecycleState::kWaitingForState &&
+          !status_.first_state_received &&
+          read_result.result.status == AdapterCallStatus::kRetryableError &&
+          is_waiting_for_initial_state_detail(read_result.result.detail)) {
+        return make_runner_result(RunnerCallStatus::kDegraded,
+                                  read_result.result.detail,
+                                  status_.latched_fault);
+      }
       return handle_adapter_failure_locked(read_result.result,
                                            FaultCategory::kAdapterRead,
                                            "adapter read failed", true);
@@ -517,6 +533,7 @@ class BridgeRunner::Impl {
   }
 
   [[nodiscard]] RunnerCallResult publish_state(StateFrame& state) {
+    extensions::HookInvocationContext context;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       state.lifecycle_state = status_.lifecycle_state;
@@ -529,6 +546,11 @@ class BridgeRunner::Impl {
         state.fault = status_.latched_fault;
       }
       state.publish_time_ns = status_.last_cycle_time_ns;
+      context = {.cycle_index = status_.cycle_count, .time_ns = status_.last_cycle_time_ns};
+    }
+
+    if (dependencies_.observation_hook != nullptr) {
+      dependencies_.observation_hook->observe_state(state, context);
     }
 
     RunnerCallResult publish_result = dependencies_.state_egress->publish(state);
@@ -634,21 +656,37 @@ class BridgeRunner::Impl {
     }
 
     if (command_to_write.has_value()) {
+      std::fprintf(stderr,
+                   "runner active command selected: seq=%llu mode=%s\n",
+                   static_cast<unsigned long long>(command_to_write->sequence),
+                   command_to_write->mode_label.c_str());
       AdapterCallResult write_result =
           dependencies_.adapter->write_command(*command_to_write);
       std::lock_guard<std::mutex> lock(mutex_);
       if (!write_result.succeeded()) {
+        std::fprintf(stderr,
+                     "runner active command write failed: %s\n",
+                     write_result.detail.c_str());
         return handle_adapter_failure_locked(write_result,
                                              FaultCategory::kAdapterWrite,
                                              "adapter command write failed",
                                              true);
       }
+      std::fprintf(stderr,
+                   "runner active command write succeeded: seq=%llu detail=%s\n",
+                   static_cast<unsigned long long>(command_to_write->sequence),
+                   write_result.detail.c_str());
 
       status_.startup_idle_active = false;
       status_.command_stale = false;
       status_.command_buffer.has_active_command = true;
       status_.command_buffer.active_command_sequence = command_to_write->sequence;
       status_.command_buffer.active_mode = command_to_write->mode;
+      if (dependencies_.observation_hook != nullptr) {
+        dependencies_.observation_hook->observe_command(
+            *command_to_write,
+            {.cycle_index = status_.cycle_count, .time_ns = cycle_time_ns});
+      }
       update_degraded_from_adapter_locked(write_result);
       return make_runner_result(write_result.status == AdapterCallStatus::kDegraded
                                     ? RunnerCallStatus::kDegraded

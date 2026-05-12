@@ -108,8 +108,9 @@ void DdsCommandIngress::handle_command(const unitree_hg::msg::dds_::LowCmd_& mes
     return;
   }
 
-  [[maybe_unused]] const auto ignored =
+  const core::CommandSubmissionResult submission =
       command_sink_->submit_latest_command(*translated.command);
+  [[maybe_unused]] const auto ignored = submission;
 }
 
 }  // namespace bridge::dds

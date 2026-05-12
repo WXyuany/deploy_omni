@@ -103,6 +103,56 @@ std::string WritePm01Config(const std::string& path) {
   return path;
 }
 
+std::string WriteSimplifiedKeplerConfig(const std::string& path,
+                                       const bool include_loop_rate = true,
+                                       const bool include_command_topic = true,
+                                       const bool include_state_topic = true) {
+  std::ofstream output(path);
+  output << "robot_kind: kepler_k2\n";
+  if (include_loop_rate) {
+    output << "loop_rate_hz: 1000\n";
+  }
+  output << "stale_command_timeout_ms: 120\n"
+         << "dds:\n";
+  if (include_command_topic) {
+    output << "  command: /lowcmd\n";
+  }
+  if (include_state_topic) {
+    output << "  state: /lowstate\n";
+  }
+  output << "  status: /bridge_status\n"
+         << "joint_mapping:\n"
+         << "  - name: left_hip_yaw\n"
+         << "    index: 0\n"
+         << "    sign: 1.0\n"
+         << "    offset: 0.0\n"
+         << "    enable: true\n";
+  return path;
+}
+
+std::string WriteSimplifiedPm01Config(const std::string& path,
+                                      const std::optional<std::string>& transport = std::nullopt,
+                                      const std::optional<std::string>& interface_hint = std::nullopt) {
+  std::ofstream output(path);
+  output << "robot_name: pm01\n"
+         << "api_rate_hz: 250\n";
+  if (transport.has_value()) {
+    output << "transport: " << *transport << "\n";
+  }
+  if (interface_hint.has_value()) {
+    output << "interface_hint: " << *interface_hint << "\n";
+  }
+  output << "dds:\n"
+         << "  command_topic: rt/lowcmd\n"
+         << "  state_topic: rt/lowstate\n"
+         << "joints:\n";
+  for (int index = 0; index < 24; ++index) {
+    output << "  - { index: " << index
+           << ", enable: true, sign: 1.0, offset: 0.0 }\n";
+  }
+  return path;
+}
+
 void TestLoadsSampleBridgeConfig() {
   const auto result = load_bridge_config("../config/kepler_k2.sample.yaml");
   assert(result.succeeded());
@@ -118,6 +168,9 @@ void TestLoadsSampleBridgeConfig() {
   assert(config.dds.topics.command == "rt/lowcmd");
   assert(config.dds.topics.state == "rt/lowstate");
   assert(config.dds.topics.status.empty());
+  assert(!config.debug_print.state);
+  assert(!config.debug_print.command);
+  assert(config.debug_print.rate_hz == 2U);
   assert(config.adapter.kind == "kepler_k2");
   assert(config.adapter.robot_name == "kepler_k2");
   assert(config.adapter.robot_model == "k2");
@@ -129,8 +182,10 @@ void TestLoadsSampleBridgeConfig() {
   assert(config.adapter.safety.safe_command_profile == "zero_torque");
   assert(config.adapter.safety.allow_safe_command_during_shutdown);
   assert(config.adapter.joint_names.size() == 12U);
-  assert(config.adapter.joint_names.front() == "l_hip_yaw");
-  assert(config.adapter.joint_names.back() == "r_ankle_roll");
+  assert(config.adapter.joint_names.front().find("joint_") == 0 ||
+        config.adapter.joint_names.front() == "l_hip_yaw");
+  assert(config.adapter.joint_names.back().find("joint_") == 0 ||
+        config.adapter.joint_names.back() == "r_ankle_roll");
   assert(config.joint_map_entries.size() == 12U);
 
   const JointMapBuildResult joint_map =
@@ -138,34 +193,139 @@ void TestLoadsSampleBridgeConfig() {
   assert(joint_map.succeeded());
 }
 
+void TestLoadsPm01SampleBridgeConfig() {
+  const auto result = load_bridge_config("../config/pm01.sample.yaml");
+  assert(result.succeeded());
+  assert(result.status == BridgeConfigLoadStatus::kOk);
+  assert(result.config.has_value());
+
+  const auto& config = *result.config;
+  assert(config.source_path == "../config/pm01.sample.yaml");
+  assert(config.robot_type == "pm01");
+  assert(config.dds.topics.command == "rt/lowcmd");
+  assert(config.dds.topics.state == "rt/lowstate");
+  assert(config.adapter.kind == "pm01");
+  assert(config.adapter.robot_name == "pm01");
+  assert(config.adapter.robot_model == "pm01");
+  assert(config.adapter.command_mode == "joint_bridge");
+  assert(config.adapter.connection.transport == "ros2");
+  assert(config.adapter.connection.interface_hint == "pm01");
+  assert(!config.adapter.motion_state.required);
+  assert(config.adapter.motion_state.required_task == "joint_bridge");
+  assert(!config.adapter.motion_state.initial_task.has_value());
+  assert(config.debug_print.state);
+  assert(!config.debug_print.command);
+  assert(config.debug_print.rate_hz == 2U);
+  assert(config.adapter.joint_names.size() == 24U);
+  assert(config.adapter.joint_names.front() == "l_hip_yaw");
+  assert(config.adapter.joint_names.back() == "r_elbow");
+  assert(config.joint_map_entries.size() == 24U);
+
+  const JointMapBuildResult joint_map =
+      JointMap::build(config.joint_map_entries, config.joint_map_validation);
+  assert(joint_map.succeeded());
+}
+
+void TestLoadsUnitreeG1SampleBridgeConfig() {
+  const auto result = load_bridge_config("../config/g1.sample.yaml");
+  assert(result.succeeded());
+  assert(result.status == BridgeConfigLoadStatus::kOk);
+  assert(result.config.has_value());
+
+  const auto& config = *result.config;
+  assert(config.source_path == "../config/g1.sample.yaml");
+  assert(config.robot_type == "unitree_g1");
+  assert(config.dds.topics.command == "bridge/command");
+  assert(config.dds.topics.state == "bridge/state");
+  assert(config.adapter.kind == "unitree_g1");
+  assert(config.adapter.robot_name == "unitree_g1");
+  assert(config.adapter.robot_model == "g1");
+  assert(config.adapter.command_mode == "raw_low_level");
+  assert(config.adapter.connection.transport == "dds");
+  assert(config.adapter.connection.interface_hint == "robot_lan0");
+  assert(config.adapter.safety.safe_command_profile == "zero_torque");
+  assert(config.adapter.joint_names.size() == 29U);
+  assert(config.joint_map_entries.size() == 29U);
+
+  const JointMapBuildResult joint_map =
+      JointMap::build(config.joint_map_entries, config.joint_map_validation);
+  assert(joint_map.succeeded());
+}
+
+void TestLoadsDebugPrintBlock() {
+  const std::string path = "bridge_config_debug_print_test.yaml";
+  WritePm01Config(path);
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "debug_print:\n"
+           << "  state: true\n"
+           << "  cmd: false\n"
+           << "  rate_hz: 2\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->debug_print.state);
+  assert(!result.config->debug_print.command);
+  assert(result.config->debug_print.rate_hz == 2U);
+}
+
+void TestLoadsPm01MotionStateConfig() {
+  const std::string path = WritePm01Config("bridge_config_pm01_motion_state_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "adapter:\n"
+           << "  motion_state:\n"
+           << "    required: true\n"
+           << "    required_task: passive\n"
+           << "    initial_task: idle\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->adapter.motion_state.required);
+  assert(result.config->adapter.motion_state.required_task == "passive");
+  assert(result.config->adapter.motion_state.initial_task.has_value());
+  assert(*result.config->adapter.motion_state.initial_task == "idle");
+}
+
+void TestLoadsSimplifiedPm01InterfaceHintOverride() {
+  const auto result = load_bridge_config(
+      WriteSimplifiedPm01Config("bridge_config_simplified_pm01_interface_hint_test.yaml",
+                                std::string("ros2"), std::string("pm01_lab")));
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->adapter.connection.transport == "ros2");
+  assert(result.config->adapter.connection.interface_hint == "pm01_lab");
+}
+
+void TestLoadsSimplifiedPm01InterfaceHintDefault() {
+  const auto result = load_bridge_config(
+      WriteSimplifiedPm01Config("bridge_config_simplified_pm01_default_hint_test.yaml",
+                                std::string("ros2"), std::nullopt));
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->adapter.connection.transport == "ros2");
+  assert(result.config->adapter.connection.interface_hint == "pm01");
+}
+
 void TestLoadsSimplifiedKeplerConfig() {
   const std::string path = "bridge_config_simplified_k2_test.yaml";
+  WriteSimplifiedKeplerConfig(path);
   {
-    std::ofstream output(path);
-    output
-        << "robot_kind: kepler_k2\n"
-        << "loop_rate_hz: 1000\n"
-        << "stale_command_timeout_ms: 120\n"
-        << "dds:\n"
-        << "  command: /lowcmd\n"
-        << "  state: /lowstate\n"
-        << "  status: /bridge_status\n"
-        << "joint_mapping:\n"
-        << "  - name: left_hip_yaw\n"
-        << "    index: 0\n"
-        << "    sign: 1.0\n"
-        << "    offset: 0.0\n"
-        << "    enable: true\n"
-        << "  - name: left_knee\n"
-        << "    index: 1\n"
-        << "    sign: -1.0\n"
-        << "    offset: 0.5\n"
-        << "    enable: false\n"
-        << "  - name: right_hip_yaw\n"
-        << "    index: 2\n"
-        << "    sign: 1.0\n"
-        << "    offset: 0.0\n"
-        << "    enable: true\n";
+    std::ofstream output(path, std::ios::app);
+    output << "  - name: left_knee\n"
+           << "    index: 1\n"
+           << "    sign: -1.0\n"
+           << "    offset: 0.5\n"
+           << "    enable: false\n"
+           << "  - name: right_hip_yaw\n"
+           << "    index: 2\n"
+           << "    sign: 1.0\n"
+           << "    offset: 0.0\n"
+           << "    enable: true\n";
   }
 
   const auto result = load_bridge_config(path);
@@ -187,6 +347,33 @@ void TestLoadsSimplifiedKeplerConfig() {
   assert(result.config->joint_map_entries[1].enabled == false);
   assert(result.config->joint_map_entries[1].transforms.position.sign == -1.0);
   assert(result.config->joint_map_entries[1].transforms.position.offset == 0.5);
+}
+
+void TestRejectsSimplifiedConfigWithoutLoopRate() {
+  const auto result = load_bridge_config(
+      WriteSimplifiedKeplerConfig("bridge_config_missing_loop_rate_test.yaml",
+                                  false, true, true));
+  assert(!result.succeeded());
+  assert(result.status == BridgeConfigLoadStatus::kRejected);
+  assert(HasIssueCode(result, BridgeConfigIssueCode::kMissingField));
+}
+
+void TestRejectsSimplifiedConfigWithoutCommandTopic() {
+  const auto result = load_bridge_config(
+      WriteSimplifiedKeplerConfig("bridge_config_missing_command_topic_test.yaml",
+                                  true, false, true));
+  assert(!result.succeeded());
+  assert(result.status == BridgeConfigLoadStatus::kRejected);
+  assert(HasIssueCode(result, BridgeConfigIssueCode::kMissingField));
+}
+
+void TestRejectsSimplifiedConfigWithoutStateTopic() {
+  const auto result = load_bridge_config(
+      WriteSimplifiedKeplerConfig("bridge_config_missing_state_topic_test.yaml",
+                                  true, true, false));
+  assert(!result.succeeded());
+  assert(result.status == BridgeConfigLoadStatus::kRejected);
+  assert(HasIssueCode(result, BridgeConfigIssueCode::kMissingField));
 }
 
 void TestLoadsPm01BackendField() {
@@ -601,7 +788,16 @@ void TestRejectsNegativeDdsDomainId() {
 
 int main() {
   TestLoadsSampleBridgeConfig();
+  TestLoadsPm01SampleBridgeConfig();
+  TestLoadsUnitreeG1SampleBridgeConfig();
+  TestLoadsDebugPrintBlock();
+  TestLoadsPm01MotionStateConfig();
+  TestLoadsSimplifiedPm01InterfaceHintOverride();
+  TestLoadsSimplifiedPm01InterfaceHintDefault();
   TestLoadsSimplifiedKeplerConfig();
+  TestRejectsSimplifiedConfigWithoutLoopRate();
+  TestRejectsSimplifiedConfigWithoutCommandTopic();
+  TestRejectsSimplifiedConfigWithoutStateTopic();
   TestLoadsPm01BackendField();
   TestRejectsUnsupportedFaultPolicyMode();
   TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth();

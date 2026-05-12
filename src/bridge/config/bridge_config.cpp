@@ -24,6 +24,7 @@ enum class TopSection {
   kNone,
   kBridge,
   kDds,
+  kDebugPrint,
   kAdapter,
   kJointMapping,
 };
@@ -51,6 +52,7 @@ enum class AdapterSubsection {
   kConnection,
   kStartup,
   kSafety,
+  kMotionState,
 };
 
 enum class JointMappingSubsection {
@@ -86,12 +88,18 @@ struct RawBridgeConfig {
   std::optional<std::string> dds_command_topic;
   std::optional<std::string> dds_state_topic;
   std::optional<std::string> dds_status_topic;
+  std::optional<bool> debug_print_state;
+  std::optional<bool> debug_print_command;
+  std::optional<int> debug_print_rate_hz;
   std::optional<std::string> connection_transport;
   std::optional<std::string> connection_interface_hint;
   std::optional<int> read_initial_state_timeout_ms;
   std::optional<bool> require_healthy_hardware;
   std::optional<std::string> safe_command_profile;
   std::optional<bool> allow_safe_command_during_shutdown;
+  std::optional<bool> motion_state_required;
+  std::optional<std::string> motion_state_required_task;
+  std::optional<std::string> motion_state_initial_task;
   JointMapValidationOptions joint_map_validation;
   std::vector<JointMapEntry> joint_map_entries;
 };
@@ -419,12 +427,20 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
         top = TopSection::kDds;
         continue;
       }
+      if (line.text == "debug_print:") {
+        top = TopSection::kDebugPrint;
+        continue;
+      }
       if (line.text == "adapter:") {
         top = TopSection::kAdapter;
         continue;
       }
       if (line.text == "joint_mapping:") {
         top = TopSection::kJointMapping;
+        continue;
+      }
+
+      if (starts_with(trim(line.text), "#")) {
         continue;
       }
 
@@ -435,6 +451,27 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
                              BridgeConfigIssueCode::kInvalidValue);
         continue;
       }
+      if (key_value.has_value() && key_value->first == "robot_name") {
+        raw->robot_name = key_value->second;
+        continue;
+      }
+      if (key_value.has_value() && (key_value->first == "api_rate_hz" || key_value->first == "loop_rate_hz")) {
+        assign_required<int>(&raw->loop_rate_hz, key_value->first, key_value->second,
+                             issues, BridgeConfigIssueCode::kInvalidValue);
+        continue;
+      }
+      if (key_value.has_value() && key_value->first == "backend") {
+        raw->adapter_backend = key_value->second;
+        continue;
+      }
+      if (key_value.has_value() && key_value->first == "transport") {
+        raw->connection_transport = key_value->second;
+        continue;
+      }
+      if (key_value.has_value() && key_value->first == "interface_hint") {
+        raw->connection_interface_hint = key_value->second;
+        continue;
+      }
       if (key_value.has_value() && key_value->first == "robot_kind") {
         raw->adapter_kind = key_value->second;
         if (!raw->robot_name.has_value()) {
@@ -442,15 +479,19 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
         }
         continue;
       }
-      if (key_value.has_value() && key_value->first == "loop_rate_hz") {
-        assign_required<int>(&raw->loop_rate_hz, "loop_rate_hz", key_value->second,
-                             issues, BridgeConfigIssueCode::kInvalidValue);
-        continue;
-      }
       if (key_value.has_value() && key_value->first == "stale_command_timeout_ms") {
         assign_required<int>(&raw->stale_command_timeout_ms,
                              "stale_command_timeout_ms", key_value->second, issues,
                              BridgeConfigIssueCode::kInvalidValue);
+        continue;
+      }
+      if (key_value.has_value() && key_value->first == "dds") {
+        top = TopSection::kDds;
+        continue;
+      }
+      if (key_value.has_value() && key_value->first == "joints") {
+        top = TopSection::kJointMapping;
+        joint_mapping_subsection = JointMappingSubsection::kEntries;
         continue;
       }
 
@@ -560,15 +601,19 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           continue;
         }
 
-        if (key_value->first == "domain_id") {
+        if (key_value->first == "domain_id" && !key_value->second.empty()) {
           assign_required<int>(&raw->dds_domain_id, "dds.domain_id",
                                key_value->second, issues,
                                BridgeConfigIssueCode::kInvalidValue);
-        } else if (key_value->first == "command") {
+        } else if (key_value->first == "command_topic" && !key_value->second.empty()) {
           raw->dds_command_topic = key_value->second;
-        } else if (key_value->first == "state") {
+        } else if (key_value->first == "state_topic" && !key_value->second.empty()) {
           raw->dds_state_topic = key_value->second;
-        } else if (key_value->first == "status") {
+        } else if (key_value->first == "command" && !key_value->second.empty()) {
+          raw->dds_command_topic = key_value->second;
+        } else if (key_value->first == "state" && !key_value->second.empty()) {
+          raw->dds_state_topic = key_value->second;
+        } else if (key_value->first == "status" && !key_value->second.empty()) {
           raw->dds_status_topic = key_value->second;
         }
         continue;
@@ -615,6 +660,32 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
       continue;
     }
 
+    if (top == TopSection::kDebugPrint) {
+      if (line.indent == 2) {
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid debug_print line: " + line.text);
+          continue;
+        }
+
+        if (key_value->first == "state") {
+          assign_required<bool>(&raw->debug_print_state, "debug_print.state",
+                                key_value->second, issues,
+                                BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "cmd") {
+          assign_required<bool>(&raw->debug_print_command, "debug_print.cmd",
+                                key_value->second, issues,
+                                BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "rate_hz") {
+          assign_required<int>(&raw->debug_print_rate_hz,
+                               "debug_print.rate_hz", key_value->second,
+                               issues, BridgeConfigIssueCode::kInvalidValue);
+        }
+      }
+      continue;
+    }
+
     if (top == TopSection::kAdapter) {
       if (line.indent == 2) {
         adapter_subsection = AdapterSubsection::kNone;
@@ -636,6 +707,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           }
           if (key_value->first == "safety") {
             adapter_subsection = AdapterSubsection::kSafety;
+            continue;
+          }
+          if (key_value->first == "motion_state") {
+            adapter_subsection = AdapterSubsection::kMotionState;
             continue;
           }
         }
@@ -692,6 +767,19 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
                                   BridgeConfigIssueCode::kInvalidValue);
           }
         }
+
+        if (adapter_subsection == AdapterSubsection::kMotionState) {
+          if (key_value->first == "required") {
+            assign_required<bool>(&raw->motion_state_required,
+                                  "adapter.motion_state.required",
+                                  key_value->second, issues,
+                                  BridgeConfigIssueCode::kInvalidValue);
+          } else if (key_value->first == "required_task") {
+            raw->motion_state_required_task = key_value->second;
+          } else if (key_value->first == "initial_task") {
+            raw->motion_state_initial_task = key_value->second;
+          }
+        }
       }
       continue;
     }
@@ -703,7 +791,48 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
         current_entry = &raw->joint_map_entries.back();
         entry_subsection = EntrySubsection::kNone;
         current_entry->enabled = true;
-        const auto key_value = split_key_value(trim(line.text.substr(2)));
+        
+        std::string entry_content = trim(line.text.substr(2));
+        
+        if (starts_with(entry_content, "{")) {
+          const auto inline_map = parse_inline_map(entry_content);
+          if (inline_map.has_value()) {
+            for (const auto& [key, value] : *inline_map) {
+              if (key == "index") {
+                const std::optional<int> idx = parse_int(value);
+                if (idx.has_value() && *idx >= 0) {
+                  current_entry->sim_index = static_cast<std::size_t>(*idx);
+                  current_entry->hardware_index = static_cast<std::size_t>(*idx);
+                }
+              } else if (key == "enable") {
+                const std::optional<bool> en = parse_bool(value);
+                if (en.has_value()) {
+                  current_entry->enabled = *en;
+                }
+              } else if (key == "sign") {
+                const std::optional<double> s = parse_double(value);
+                if (s.has_value()) {
+                  apply_default_joint_transform(current_entry, *s,
+                                                current_entry->transforms.position.offset);
+                }
+              } else if (key == "offset") {
+                const std::optional<double> o = parse_double(value);
+                if (o.has_value()) {
+                  apply_default_joint_transform(current_entry,
+                                                current_entry->transforms.position.sign,
+                                                *o);
+                }
+              } else if (key == "name") {
+                current_entry->sim_name = value;
+                current_entry->hardware_name = value;
+                current_entry->label = value;
+              }
+            }
+          }
+          continue;
+        }
+        
+        const auto key_value = split_key_value(entry_content);
         if (!key_value.has_value()) {
           push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
                      "invalid simplified joint_mapping entry line: " + line.text);
@@ -1004,11 +1133,14 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   }
   if (!raw.loop_rate_hz.has_value()) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "bridge.loop_rate_hz is required");
+               simplified_config ? "api_rate_hz or loop_rate_hz is required"
+                                 : "bridge.loop_rate_hz is required");
   }
   if (!raw.stale_command_timeout_ms.has_value()) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "bridge.stale_command_timeout_ms is required");
+    if (!simplified_config) {
+      push_issue(issues, BridgeConfigIssueCode::kMissingField,
+                 "bridge.stale_command_timeout_ms is required");
+    }
   }
   if (!raw.startup_idle_mode.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
@@ -1039,8 +1171,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
                "bridge.fault_policy.halt_command_writes_while_faulted is required");
   }
   if (!raw.adapter_kind.has_value() || raw.adapter_kind->empty()) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "adapter.kind is required");
+    if (!simplified_config) {
+      push_issue(issues, BridgeConfigIssueCode::kMissingField,
+                 "adapter.kind is required");
+    }
   }
   if ((!raw.command_mode.has_value() || raw.command_mode->empty()) &&
       !simplified_config) {
@@ -1053,11 +1187,13 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   }
   if (!raw.dds_command_topic.has_value() || raw.dds_command_topic->empty()) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "dds.topics.command.name is required");
+               simplified_config ? "dds.command_topic or dds.command is required"
+                                 : "dds.topics.command.name is required");
   }
   if (!raw.dds_state_topic.has_value() || raw.dds_state_topic->empty()) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "dds.topics.state.name is required");
+               simplified_config ? "dds.state_topic or dds.state is required"
+                                 : "dds.topics.state.name is required");
   }
   if ((!raw.connection_transport.has_value() || raw.connection_transport->empty()) &&
       !simplified_config) {
@@ -1096,13 +1232,25 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     return std::nullopt;
   }
 
-  const std::string adapter_kind = *raw.adapter_kind;
+  const std::string adapter_kind = raw.adapter_kind.has_value() 
+      ? *raw.adapter_kind 
+      : raw.robot_name.value_or("kepler_k2");
   const std::string robot_name = raw.robot_name.value_or(adapter_kind);
   const std::string adapter_backend = raw.adapter_backend.value_or("");
   const std::string command_mode = raw.command_mode.value_or(
       adapter_kind == "pm01" ? "joint_bridge" : "torque_pd_passthrough");
   const int dds_domain_id = raw.dds_domain_id.value_or(0);
   const std::string dds_status_topic = raw.dds_status_topic.value_or("");
+  const bool debug_print_state = raw.debug_print_state.value_or(false);
+  const bool debug_print_command = raw.debug_print_command.value_or(false);
+  const int debug_print_rate_hz = raw.debug_print_rate_hz.value_or(0);
+  const bool motion_state_required = raw.motion_state_required.value_or(true);
+  const std::string motion_state_required_task =
+      raw.motion_state_required_task.value_or("joint_bridge");
+  const std::optional<std::string> motion_state_initial_task =
+      raw.motion_state_initial_task.has_value() && raw.motion_state_initial_task->empty()
+          ? std::nullopt
+          : raw.motion_state_initial_task;
   const std::string connection_transport =
       raw.connection_transport.value_or(adapter_kind == "pm01" ? "dds" : "udp");
   const std::string connection_interface_hint = raw.connection_interface_hint.value_or(
@@ -1149,13 +1297,13 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   const std::optional<std::uint64_t> loop_period_ns = hz_to_period_ns(*raw.loop_rate_hz);
   if (!loop_period_ns.has_value()) {
     push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
-               "bridge.loop_rate_hz must be greater than zero");
+               "api_rate_hz must be greater than zero");
   }
   const std::optional<std::uint64_t> stale_timeout_ns =
-      ms_to_ns(*raw.stale_command_timeout_ms);
+      ms_to_ns(raw.stale_command_timeout_ms.value_or(120));
   if (!stale_timeout_ns.has_value()) {
     push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
-               "bridge.stale_command_timeout_ms must be non-negative");
+               "stale_command_timeout_ms must be non-negative");
   }
   const std::optional<std::uint64_t> initialize_timeout_ns =
       ms_to_ns(read_initial_state_timeout_ms);
@@ -1166,6 +1314,14 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   if (dds_domain_id < 0) {
     push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
                "dds.domain_id must be non-negative");
+  }
+  if (debug_print_rate_hz < 0) {
+    push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+               "debug_print.rate_hz must be non-negative");
+  }
+  if (motion_state_required && motion_state_required_task.empty()) {
+    push_issue(issues, BridgeConfigIssueCode::kMissingField,
+               "adapter.motion_state.required_task is required when motion gate is enabled");
   }
 
   if (!issues->empty()) {
@@ -1194,12 +1350,20 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     if (!entry.enabled) {
       continue;
     }
-    if (!entry.hardware_name.has_value() || entry.hardware_name->empty()) {
-      push_issue(issues, BridgeConfigIssueCode::kMissingField,
-                 "each enabled joint_mapping entry must define hardware_name");
-      continue;
+    std::string joint_name;
+    if (entry.hardware_name.has_value() && !entry.hardware_name->empty()) {
+      joint_name = *entry.hardware_name;
+    } else if (entry.sim_name.has_value() && !entry.sim_name->empty()) {
+      joint_name = *entry.sim_name;
+    } else if (entry.label.has_value() && !entry.label->empty()) {
+      joint_name = *entry.label;
     }
-    enabled_joint_names.emplace_back(entry.hardware_index, *entry.hardware_name);
+    if (joint_name.empty()) {
+      joint_name = "joint_" + std::to_string(entry.hardware_index);
+    }
+    if (!joint_name.empty()) {
+      enabled_joint_names.emplace_back(entry.hardware_index, joint_name);
+    }
   }
 
   std::sort(enabled_joint_names.begin(), enabled_joint_names.end(),
@@ -1234,6 +1398,9 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.dds.topics.command = *raw.dds_command_topic;
   config.dds.topics.state = *raw.dds_state_topic;
   config.dds.topics.status = dds_status_topic;
+  config.debug_print.state = debug_print_state;
+  config.debug_print.command = debug_print_command;
+  config.debug_print.rate_hz = static_cast<std::uint32_t>(debug_print_rate_hz);
   config.runner.startup_idle_policy =
       use_adapter_safe_command ? core::StartupIdlePolicy::kPreferSafeCommand
                                : core::StartupIdlePolicy::kNoCommandWrite;
@@ -1247,7 +1414,18 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
 
   config.adapter.kind = adapter_kind;
   config.adapter.robot_name = robot_name;
-  config.adapter.robot_model = raw.robot_model.value_or("");
+  // Simplified config: derive robot_model from robot_name if not provided
+  std::string robot_model = raw.robot_model.value_or("");
+  if (robot_model.empty() && !adapter_kind.empty()) {
+    if (adapter_kind == "kepler_k2") {
+      robot_model = "k2";
+    } else if (adapter_kind == "pm01") {
+      robot_model = "pm01";
+    } else {
+      robot_model = adapter_kind;
+    }
+  }
+  config.adapter.robot_model = robot_model;
   config.adapter.backend = adapter_backend;
   config.adapter.command_mode = command_mode;
   config.adapter.connection.transport = connection_transport;
@@ -1257,6 +1435,9 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.adapter.safety.safe_command_profile = safe_command_profile;
   config.adapter.safety.allow_safe_command_during_shutdown =
       allow_safe_command_during_shutdown;
+  config.adapter.motion_state.required = motion_state_required;
+  config.adapter.motion_state.required_task = motion_state_required_task;
+  config.adapter.motion_state.initial_task = motion_state_initial_task;
   config.adapter.joint_names = std::move(joint_names);
 
   config.joint_map_validation = joint_map_validation;

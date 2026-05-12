@@ -16,6 +16,7 @@ using bridge::extensions::JointLockSetting;
 using bridge::extensions::LegacyKeplerHookOptions;
 using bridge::extensions::LegacyKeplerHooks;
 using bridge::extensions::ObservationKind;
+using bridge::extensions::TerminalObservationOptions;
 using bridge::extensions::TorqueSmoothingSetting;
 
 CommandFrame MakeCommand() {
@@ -143,10 +144,24 @@ void TestEnabledHooksRemainDeterministicAndExplicitlyOptIn() {
   assert(SameCommand(reset_smoothed.command, next_command));
 }
 
+void TestTerminalObservationHookStaysCallable() {
+  auto hook = bridge::extensions::make_terminal_observation_hook(
+      TerminalObservationOptions{.print_command = true,
+                                 .print_state = true,
+                                 .rate_hz = 0,
+                                 .joint_names = {"joint_a", "joint_b", "joint_c"}});
+  const HookInvocationContext context{.cycle_index = 7, .time_ns = 700};
+  hook->observe_command(MakeCommand(), context);
+  hook->observe_state(MakeState(), context);
+  hook->observe_debug("ignored", context);
+  assert(hook->records().empty());
+}
+
 }
 
 int main() {
   TestDefaultHooksStayDisabledAndDoNotChangeCoreFrames();
   TestEnabledHooksRemainDeterministicAndExplicitlyOptIn();
+  TestTerminalObservationHookStaysCallable();
   return 0;
 }

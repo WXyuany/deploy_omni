@@ -110,6 +110,8 @@ StateFrame MakeStateFrame() {
   state.sequence = 77U;
   state.sample_time_ns = 9000U;
   state.publish_time_ns = 9015U;
+  state.mode_pr = 8U;
+  state.mode_machine = 5U;
   state.lifecycle_state = LifecycleState::kActive;
   state.active_mode = ControlMode::kHybrid;
   state.mode_label = "hybrid_tracking";
@@ -124,6 +126,7 @@ StateFrame MakeStateFrame() {
       .valid = true,
       .stale = false,
       .orientation_xyzw = {0.0, 0.0, 0.70710678, 0.70710678},
+      .rpy_xyz = {0.11, 0.12, 0.13},
       .angular_velocity_xyz = {0.01, 0.02, 0.03},
       .linear_acceleration_xyz = {0.0, 0.1, 9.81},
   };
@@ -198,9 +201,15 @@ void TestEncodeTypedStatePublications() {
 
   const auto& state_msg = *encoded_state.state;
   assert(state_msg.tick() == 77U);
+  assert(state_msg.mode_pr() == 8U);
   assert(state_msg.mode_machine() == 5U);
   assert(state_msg.motor_state()[0].q() == 0.1F);
   assert(state_msg.motor_state()[1].q() == -0.2F);
+  assert(state_msg.imu_state().quaternion()[0] == 0.70710677F ||
+         state_msg.imu_state().quaternion()[0] == 0.70710678F);
+  assert(state_msg.imu_state().rpy()[0] == 0.11F);
+  assert(state_msg.imu_state().rpy()[1] == 0.12F);
+  assert(state_msg.imu_state().rpy()[2] == 0.13F);
 }
 
 void TestDdsFactoryCreatesAssembly() {
@@ -265,6 +274,7 @@ void TestStateEgressRejectsInvalidPublishedState() {
       .valid = true,
       .stale = false,
       .orientation_xyzw = {1.0, 0.0, 0.0},
+      .rpy_xyz = {0.0, 0.0, 0.0},
       .angular_velocity_xyz = {0.01, 0.02, 0.03},
       .linear_acceleration_xyz = {0.0, 0.1, 9.81},
   };

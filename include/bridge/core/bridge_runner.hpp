@@ -6,6 +6,10 @@
 #include <string>
 #include <string_view>
 
+namespace bridge::extensions {
+class ObservationHook;
+}
+
 #include "robot_sdk_adapter.hpp"
 #include "types.hpp"
 
@@ -127,6 +131,7 @@ struct BridgeRunnerDependencies {
   RobotSdkAdapter* adapter{nullptr};
   BridgeCommandIngress* command_ingress{nullptr};
   BridgeStateEgress* state_egress{nullptr};
+  extensions::ObservationHook* observation_hook{nullptr};
 };
 
 class BridgeRunner final : public BridgeCommandSink,

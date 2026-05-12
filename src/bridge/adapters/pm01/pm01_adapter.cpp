@@ -1,7 +1,9 @@
 #include "../../../../include/bridge/adapters/pm01/pm01_adapter.hpp"
+#include "bridge/build_config.hpp"
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -11,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
 #include <rclcpp/executors/single_threaded_executor.hpp>
 #include <rclcpp/qos.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -54,6 +56,25 @@ constexpr char kRos2TransportPrefix[] = "ros2";
   return "unknown";
 }
 
+[[nodiscard]] std::uint8_t encode_control_mode(
+    const bridge::core::ControlMode mode) noexcept {
+  switch (mode) {
+    case bridge::core::ControlMode::kUnknown:
+      return 0U;
+    case bridge::core::ControlMode::kSafeIdle:
+      return 1U;
+    case bridge::core::ControlMode::kTorque:
+      return 2U;
+    case bridge::core::ControlMode::kVelocity:
+      return 3U;
+    case bridge::core::ControlMode::kPosition:
+      return 4U;
+    case bridge::core::ControlMode::kHybrid:
+      return 5U;
+  }
+  return 0U;
+}
+
 [[nodiscard]] bool vector_width_matches(const std::vector<double>& values,
                                         const std::size_t width) noexcept {
   return values.empty() || values.size() == width;
@@ -83,7 +104,7 @@ constexpr char kRos2TransportPrefix[] = "ros2";
 
 [[nodiscard]] bool wants_ros2_backend(const Pm01AdapterConfig& config) noexcept {
   return config.backend == kRos2TransportPrefix ||
-         config.session.transport_address.rfind(kRos2TransportPrefix, 0) == 0;
+         config.session.transport_endpoint.rfind(kRos2TransportPrefix, 0) == 0;
 }
 
 }  // namespace
@@ -91,6 +112,17 @@ constexpr char kRos2TransportPrefix[] = "ros2";
 class Pm01Adapter::Impl {
  public:
   explicit Impl(Pm01AdapterConfig config) : config_(std::move(config)) {}
+
+  ~Impl() {
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
+    if (ros_spin_thread_.joinable()) {
+      if (ros_executor_) {
+        ros_executor_->cancel();
+      }
+      ros_spin_thread_.join();
+    }
+#endif
+  }
 
   [[nodiscard]] const Pm01AdapterConfig& config() const noexcept {
     return config_;
@@ -120,7 +152,7 @@ class Pm01Adapter::Impl {
     }
 
     if (wants_real_backend()) {
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
       if (const auto init = initialize_ros2_backend_locked(); !init.succeeded()) {
         lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
         return init;
@@ -168,7 +200,7 @@ class Pm01Adapter::Impl {
     last_read_time_ns_ = synthetic_time_ns_;
 
     if (wants_real_backend()) {
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
       return read_state_from_ros2_locked();
 #else
       result.result = make_error_result(bridge::core::AdapterCallStatus::kFatalError,
@@ -184,12 +216,14 @@ class Pm01Adapter::Impl {
       lifecycle_state_ = bridge::core::LifecycleState::kActive;
     }
 
-    bridge::core::StateFrame state;
-    state.sequence = ++state_sequence_;
-    state.sample_time_ns = synthetic_time_ns_;
-    state.publish_time_ns = synthetic_time_ns_;
-    state.lifecycle_state = lifecycle_state_;
-    state.active_mode = vendor_session_.active_mode();
+     bridge::core::StateFrame state;
+     state.sequence = ++state_sequence_;
+     state.sample_time_ns = synthetic_time_ns_;
+     state.publish_time_ns = synthetic_time_ns_;
+     state.mode_pr = vendor_session_.mode_pr();
+     state.mode_machine = vendor_session_.mode_machine();
+     state.lifecycle_state = lifecycle_state_;
+     state.active_mode = vendor_session_.active_mode();
     state.mode_label = vendor_session_.mode_label();
     state.valid = true;
     state.stale = false;
@@ -277,8 +311,8 @@ class Pm01Adapter::Impl {
     last_write_time_ns_ = synthetic_time_ns_;
 
     if (wants_real_backend()) {
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
-      return write_command_to_ros2_locked(command);
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
+      return write_command_to_ros2_locked(command); //正常这里进去
 #else
       return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
                                bridge::core::FaultCategory::kConfiguration,
@@ -319,7 +353,7 @@ class Pm01Adapter::Impl {
     last_write_time_ns_ = synthetic_time_ns_;
 
     if (wants_real_backend()) {
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
       return write_safe_command_to_ros2_locked();
 #else
       return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
@@ -341,7 +375,7 @@ class Pm01Adapter::Impl {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (wants_real_backend()) {
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
       return query_ros2_health_locked();
 #else
       bridge::core::AdapterHealthResult result;
@@ -379,7 +413,7 @@ class Pm01Adapter::Impl {
     synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
 
     if (wants_real_backend()) {
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
       return shutdown_ros2_backend_locked();
 #else
       lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
@@ -402,7 +436,7 @@ class Pm01Adapter::Impl {
   }
 
  private:
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
   [[nodiscard]] bridge::core::AdapterCallResult initialize_ros2_backend_locked() {
     if (!rclcpp::ok()) {
       int argc = 0;
@@ -444,6 +478,12 @@ class Pm01Adapter::Impl {
 
     ros_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
     ros_executor_->add_node(ros_node_);
+    ros_spin_thread_ = std::thread([this]() {
+      auto* const executor = ros_executor_.get();
+      if (executor != nullptr) {
+        executor->spin();
+      }
+    });
 
     return make_status_result(bridge::core::AdapterCallStatus::kOk,
                               "pm01 ROS2 backend initialized");
@@ -451,9 +491,6 @@ class Pm01Adapter::Impl {
 
   [[nodiscard]] bridge::core::AdapterReadResult read_state_from_ros2_locked() {
     bridge::core::AdapterReadResult result;
-    if (ros_executor_) {
-      ros_executor_->spin_some();
-    }
     interface_protocol::msg::JointState::SharedPtr joint_state;
     interface_protocol::msg::ImuInfo::SharedPtr imu;
     {
@@ -473,17 +510,18 @@ class Pm01Adapter::Impl {
     has_read_state_ = true;
     lifecycle_state_ = bridge::core::LifecycleState::kActive;
 
-    bridge::core::StateFrame state;
-    state.sequence = ++state_sequence_;
-    state.sample_time_ns = synthetic_time_ns_;
-    state.publish_time_ns = synthetic_time_ns_;
-    state.lifecycle_state = lifecycle_state_;
-    state.active_mode = ros_active_mode_;
+     bridge::core::StateFrame state;
+     state.sequence = ++state_sequence_;
+     state.sample_time_ns = synthetic_time_ns_;
+     state.publish_time_ns = synthetic_time_ns_;
+     state.mode_pr = ros_mode_pr_;
+     state.mode_machine = ros_mode_machine_;
+     state.lifecycle_state = lifecycle_state_;
+     state.active_mode = ros_active_mode_;
     state.mode_label = ros_mode_label_;
     state.valid = true;
     state.stale = false;
     state.degraded = false;
-    state.command_stale = false;
     state.joints.position = joint_state->position;
     state.joints.velocity = joint_state->velocity;
     state.joints.effort = joint_state->torque;
@@ -492,12 +530,13 @@ class Pm01Adapter::Impl {
     if (imu) {
       bridge::core::ImuSample sample;
       sample.sample_time_ns = synthetic_time_ns_;
-      sample.valid = true;
-      sample.stale = false;
-      sample.orientation_xyzw = {imu->quaternion.x, imu->quaternion.y,
-                                 imu->quaternion.z, imu->quaternion.w};
-      sample.angular_velocity_xyz = {imu->angular_velocity.x, imu->angular_velocity.y,
-                                     imu->angular_velocity.z};
+       sample.valid = true;
+       sample.stale = false;
+       sample.orientation_xyzw = {imu->quaternion.x, imu->quaternion.y,
+                                  imu->quaternion.z, imu->quaternion.w};
+       sample.rpy_xyz = {imu->rpy.x, imu->rpy.y, imu->rpy.z};
+       sample.angular_velocity_xyz = {imu->angular_velocity.x, imu->angular_velocity.y,
+                                      imu->angular_velocity.z};
       sample.linear_acceleration_xyz = {imu->linear_acceleration.x,
                                         imu->linear_acceleration.y,
                                         imu->linear_acceleration.z};
@@ -514,22 +553,35 @@ class Pm01Adapter::Impl {
 
   [[nodiscard]] bridge::core::AdapterCallResult write_command_to_ros2_locked(
       const bridge::core::CommandFrame& command) {
+    const double position0 = command.joints.position.empty() ? 0.0 : command.joints.position.front();
+    const double velocity0 = command.joints.velocity.empty() ? 0.0 : command.joints.velocity.front();
+    std::fprintf(stderr,
+                 "pm01 ros2 write begin: seq=%llu mode=%s pos0=%.6f vel0=%.6f\n",
+                 static_cast<unsigned long long>(command.sequence),
+                 command.mode_label.c_str(),
+                 position0,
+                 velocity0);
+
     interface_protocol::msg::MotionState::SharedPtr motion_state;
-    if (ros_executor_) {
-      ros_executor_->spin_some();
-    }
     {
       std::lock_guard<std::mutex> ros_lock(ros_mutex_);
       motion_state = latest_motion_state_;
     }
 
     if (config_.motion_state.required && !motion_state) {
+      std::fprintf(stderr,
+                   "pm01 blocked: /motion/motion_state missing while motion gate is enabled\n");
       return make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
                                bridge::core::FaultCategory::kSafety,
                                bridge::core::FaultSeverity::kRecoverable,
                                "DDS->ROS2 command forwarding is blocked until /motion/motion_state is received");
     }
-    if (motion_state && motion_state->current_motion_task != config_.motion_state.required_task) {
+    if (config_.motion_state.required && motion_state &&
+        motion_state->current_motion_task != config_.motion_state.required_task) {
+      std::fprintf(stderr,
+                   "pm01 blocked: current_motion_task=%s required_task=%s\n",
+                   motion_state->current_motion_task.c_str(),
+                   config_.motion_state.required_task.c_str());
       return make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
                                bridge::core::FaultCategory::kSafety,
                                bridge::core::FaultSeverity::kRecoverable,
@@ -555,7 +607,15 @@ class Pm01Adapter::Impl {
       ros_command.damping[index] = command.joints.damping.empty() ? 0.0 : command.joints.damping[index];
     }
 
+    std::fprintf(stderr,
+                 "pm01 ros2 command publish: joints=%zu pos0=%.6f vel0=%.6f\n",
+                 ros_command.position.size(),
+                 ros_command.position.empty() ? 0.0 : ros_command.position.front(),
+                 ros_command.velocity.empty() ? 0.0 : ros_command.velocity.front());
     joint_cmd_pub_->publish(ros_command);
+    ros_mode_pr_ = command.mode_pr;
+    ros_mode_machine_ =
+        command.mode_machine == 0U ? encode_control_mode(command.mode) : command.mode_machine;
     ros_active_mode_ = command.mode;
     ros_mode_label_ = command.mode_label.empty() ? control_mode_label(command.mode)
                                                  : command.mode_label;
@@ -601,10 +661,19 @@ class Pm01Adapter::Impl {
     connection_alive_ = false;
     initialized_ = false;
     has_read_state_ = false;
+    if (ros_executor_) {
+      ros_executor_->cancel();
+    }
+    if (ros_spin_thread_.joinable()) {
+      ros_spin_thread_.join();
+    }
     joint_cmd_pub_.reset();
     joint_state_sub_.reset();
     imu_sub_.reset();
     motion_state_sub_.reset();
+    latest_joint_state_.reset();
+    latest_imu_.reset();
+    latest_motion_state_.reset();
     ros_executor_.reset();
     ros_node_.reset();
     if (owns_ros_context_ && rclcpp::ok()) {
@@ -644,6 +713,8 @@ class Pm01Adapter::Impl {
       assign_zeroed(damping_);
       assign_zeroed(acceleration_);
       current_motion_task_ = std::move(initial_motion_task);
+      mode_pr_ = 0U;
+      mode_machine_ = 0U;
       set_active_mode(bridge::core::ControlMode::kSafeIdle,
                       control_mode_label(bridge::core::ControlMode::kSafeIdle));
     }
@@ -660,6 +731,9 @@ class Pm01Adapter::Impl {
       assign_to_slots(effort_, command.joints.effort, indices);
       assign_to_slots(stiffness_, command.joints.stiffness, indices);
       assign_to_slots(damping_, command.joints.damping, indices);
+      mode_pr_ = command.mode_pr;
+      mode_machine_ =
+          command.mode_machine == 0U ? encode_control_mode(command.mode) : command.mode_machine;
       set_active_mode(command.mode,
                       command.mode_label.empty() ? control_mode_label(command.mode)
                                                  : command.mode_label);
@@ -717,6 +791,14 @@ class Pm01Adapter::Impl {
       return current_motion_task_;
     }
 
+    [[nodiscard]] std::uint8_t mode_pr() const noexcept {
+      return mode_pr_;
+    }
+
+    [[nodiscard]] std::uint8_t mode_machine() const noexcept {
+      return mode_machine_;
+    }
+
    private:
     static void assign_zeroed(std::vector<double>& slots) {
       slots.assign(slots.size(), 0.0);
@@ -756,6 +838,8 @@ class Pm01Adapter::Impl {
     std::vector<double> damping_;
     std::vector<double> acceleration_;
     std::optional<std::string> current_motion_task_;
+    std::uint8_t mode_pr_{0U};
+    std::uint8_t mode_machine_{0U};
     bridge::core::ControlMode mode_{bridge::core::ControlMode::kUnknown};
     std::string mode_label_{control_mode_label(mode_)};
   };
@@ -767,11 +851,11 @@ class Pm01Adapter::Impl {
                                bridge::core::FaultSeverity::kFatal,
                                "session.robot_id must not be empty");
     }
-    if (config_.session.transport_address.empty()) {
+    if (config_.session.transport_endpoint.empty()) {
       return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
                                bridge::core::FaultCategory::kConfiguration,
                                bridge::core::FaultSeverity::kFatal,
-                               "session.transport_address must not be empty");
+                                "session.transport_endpoint must not be empty");
     }
     if (config_.joint_names.size() != kPm01JointCount) {
       return make_error_result(bridge::core::AdapterCallStatus::kFatalError,
@@ -888,6 +972,7 @@ class Pm01Adapter::Impl {
     imu.valid = false;
     imu.stale = true;
     imu.orientation_xyzw = {0.0, 0.0, 0.0, 1.0};
+    imu.rpy_xyz = {0.0, 0.0, 0.0};
     imu.angular_velocity_xyz = {0.0, 0.0, 0.0};
     imu.linear_acceleration_xyz = {0.0, 0.0, 0.0};
     return imu;
@@ -997,6 +1082,7 @@ class Pm01Adapter::Impl {
   bool owns_ros_context_{false};
   std::shared_ptr<rclcpp::Node> ros_node_;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> ros_executor_;
+  std::thread ros_spin_thread_;
   mutable std::mutex ros_mutex_;
   rclcpp::Subscription<interface_protocol::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<interface_protocol::msg::ImuInfo>::SharedPtr imu_sub_;
@@ -1007,13 +1093,20 @@ class Pm01Adapter::Impl {
   interface_protocol::msg::MotionState::SharedPtr latest_motion_state_;
   bridge::core::ControlMode ros_active_mode_{bridge::core::ControlMode::kSafeIdle};
   std::string ros_mode_label_{control_mode_label(bridge::core::ControlMode::kSafeIdle)};
+  std::uint8_t ros_mode_pr_{0U};
+  std::uint8_t ros_mode_machine_{0U};
 #endif
 };
 
 Pm01Adapter::Pm01Adapter(Pm01AdapterConfig config)
     : impl_(std::make_unique<Impl>(std::move(config))) {}
 
-Pm01Adapter::~Pm01Adapter() = default;
+Pm01Adapter::~Pm01Adapter() {
+  if (impl_) {
+    const auto shutdown_result = impl_->shutdown();
+    static_cast<void>(shutdown_result.status);
+  }
+}
 
 Pm01Adapter::Pm01Adapter(Pm01Adapter&&) noexcept = default;
 

@@ -126,6 +126,7 @@ struct ImuSample {
   bool valid{false};
   bool stale{false};
   std::vector<double> orientation_xyzw;
+  std::vector<double> rpy_xyz;
   std::vector<double> angular_velocity_xyz;
   std::vector<double> linear_acceleration_xyz;
 };
@@ -134,6 +135,8 @@ struct CommandFrame {
   std::uint64_t sequence{0};
   std::uint64_t source_time_ns{0};
   std::uint64_t receive_time_ns{0};
+  std::uint8_t mode_pr{0};
+  std::uint8_t mode_machine{0};
   ControlMode mode{ControlMode::kUnknown};
   std::string mode_label;
   bool valid{false};
@@ -146,6 +149,8 @@ struct StateFrame {
   std::uint64_t sequence{0};
   std::uint64_t sample_time_ns{0};
   std::uint64_t publish_time_ns{0};
+  std::uint8_t mode_pr{0};
+  std::uint8_t mode_machine{0};
   LifecycleState lifecycle_state{LifecycleState::kCreated};
   ControlMode active_mode{ControlMode::kUnknown};
   std::string mode_label;

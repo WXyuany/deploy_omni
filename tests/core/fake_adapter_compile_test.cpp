@@ -39,6 +39,8 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
     state.sequence = 9;
     state.sample_time_ns = 1000;
     state.publish_time_ns = 1010;
+    state.mode_pr = 3;
+    state.mode_machine = 2;
     state.lifecycle_state = LifecycleState::kActive;
     state.active_mode = ControlMode::kTorque;
     state.mode_label = "closed_loop";
@@ -56,6 +58,7 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
         .valid = true,
         .stale = false,
         .orientation_xyzw = {0.0, 0.0, 0.0, 1.0},
+        .rpy_xyz = {0.0, 0.0, 0.0},
         .angular_velocity_xyz = {0.0, 0.0, 0.0},
         .linear_acceleration_xyz = {0.0, 0.0, 9.81},
     };
@@ -133,6 +136,8 @@ int main() {
   command.sequence = 4;
   command.source_time_ns = 50;
   command.receive_time_ns = 60;
+  command.mode_pr = 3;
+  command.mode_machine = 2;
   command.mode = ControlMode::kTorque;
   command.mode_label = "torque";
   command.valid = true;

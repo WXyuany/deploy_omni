@@ -59,6 +59,13 @@ struct LegacyKeplerHookOptions {
   std::vector<ExtraModeLabel> extra_mode_labels;
 };
 
+struct TerminalObservationOptions {
+  bool print_command{false};
+  bool print_state{false};
+  std::uint32_t rate_hz{0};
+  std::vector<std::string> joint_names;
+};
+
 class JointLockHook {
  public:
   virtual ~JointLockHook() = default;
@@ -143,5 +150,29 @@ class LegacyKeplerHooks final : public JointLockHook,
 
 [[nodiscard]] std::unique_ptr<LegacyKeplerHooks> make_legacy_kepler_hooks(
     LegacyKeplerHookOptions options = {});
+
+class TerminalObservationHook final : public ObservationHook {
+ public:
+  explicit TerminalObservationHook(TerminalObservationOptions options = {});
+
+  void observe_command(const bridge::core::CommandFrame& command,
+                       const HookInvocationContext& context) override;
+  void observe_state(const bridge::core::StateFrame& state,
+                     const HookInvocationContext& context) override;
+  void observe_debug(std::string_view message,
+                     const HookInvocationContext& context) override;
+
+  [[nodiscard]] const std::vector<ObservationRecord>& records()
+      const noexcept override;
+
+ private:
+  TerminalObservationOptions options_;
+  std::vector<ObservationRecord> records_;
+  std::uint64_t last_command_print_time_ns_{0};
+  std::uint64_t last_state_print_time_ns_{0};
+};
+
+[[nodiscard]] std::unique_ptr<TerminalObservationHook> make_terminal_observation_hook(
+    TerminalObservationOptions options = {});
 
 }

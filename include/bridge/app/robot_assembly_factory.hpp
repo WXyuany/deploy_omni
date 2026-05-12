@@ -10,6 +10,7 @@
 #include "../config/joint_map.hpp"
 #include "../core/bridge_runner.hpp"
 #include "../dds/dds_facade.hpp"
+#include "../extensions/hooks.hpp"
 
 namespace bridge::app {
 
@@ -19,12 +20,14 @@ struct RobotAssembly {
   std::unique_ptr<core::RobotSdkAdapter> adapter;
   std::unique_ptr<core::BridgeCommandIngress> command_ingress;
   std::unique_ptr<core::BridgeStateEgress> state_egress;
+  std::unique_ptr<extensions::ObservationHook> observation_hook;
 
   [[nodiscard]] core::BridgeRunnerDependencies runner_dependencies() const noexcept {
     return {
         .adapter = adapter.get(),
         .command_ingress = command_ingress.get(),
         .state_egress = state_egress.get(),
+        .observation_hook = observation_hook.get(),
     };
   }
 };
