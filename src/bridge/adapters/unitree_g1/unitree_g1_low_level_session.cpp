@@ -420,8 +420,7 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
   synthetic_time_ns_ += tick_or_default(config_.write_timeout_ns);
   last_write_time_ns_ = synthetic_time_ns_;
   mode_pr_ = command.mode_pr;
-  const std::uint8_t effective_mode_machine =
-      latest_low_state_.has_value() ? latest_low_state_->mode_machine() : mode_machine_;
+  const std::uint8_t effective_mode_machine = command.mode_machine;
   mode_machine_ = effective_mode_machine;
   const auto now = std::chrono::steady_clock::now();
   if (last_command_print_time_ == std::chrono::steady_clock::time_point{} ||

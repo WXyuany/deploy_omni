@@ -285,7 +285,9 @@ CommandTranslation translate_lowcmd_to_command(
   command.joints.effort.resize(width);
   command.joints.stiffness.resize(width);
   command.joints.damping.resize(width);
+  command.joints.motor_mode.resize(width);
   for (std::size_t index = 0; index < width; ++index) {
+    command.joints.motor_mode[index] = message.motor_cmd()[index].mode();
     command.joints.position[index] = message.motor_cmd()[index].q();
     command.joints.velocity[index] = message.motor_cmd()[index].dq();
     command.joints.effort[index] = message.motor_cmd()[index].tau();
@@ -322,7 +324,9 @@ CommandTranslation translate_lowcmd_to_hardware_command(
   command.joints.effort.resize(width);
   command.joints.stiffness.resize(width);
   command.joints.damping.resize(width);
+  command.joints.motor_mode.resize(width);
   for (std::size_t index = 0; index < width; ++index) {
+    command.joints.motor_mode[index] = message.motor_cmd()[index].mode();
     command.joints.position[index] = message.motor_cmd()[index].q();
     command.joints.velocity[index] = message.motor_cmd()[index].dq();
     command.joints.effort[index] = message.motor_cmd()[index].tau();

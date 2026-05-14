@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -324,14 +325,30 @@ void report_width_mismatch(std::vector<JointMapIssue>* issues,
 }
 
 [[nodiscard]] bool block_field_width_ok(std::vector<JointMapIssue>* issues,
-                                        const std::vector<double>& values,
+                                         const std::vector<double>& values,
+                                         const std::size_t expected_width,
+                                         const std::string& vector_name) {
+  if (values.empty()) {
+    return true;
+  }
+
+  return validate_input_width(issues, values, expected_width, vector_name);
+}
+
+[[nodiscard]] bool block_field_width_ok(std::vector<JointMapIssue>* issues,
+                                        const std::vector<std::uint8_t>& values,
                                         const std::size_t expected_width,
                                         const std::string& vector_name) {
   if (values.empty()) {
     return true;
   }
 
-  return validate_input_width(issues, values, expected_width, vector_name);
+  if (values.size() == expected_width) {
+    return true;
+  }
+
+  report_width_mismatch(issues, vector_name, values.size(), expected_width);
+  return false;
 }
 
 VectorProjectionResult project_vector_impl(const std::vector<JointMapEntry>& entries,
@@ -388,6 +405,22 @@ VectorProjectionResult project_vector_impl(const std::vector<JointMapEntry>& ent
   }
 
   return result;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> project_motor_modes_sim_to_hardware(
+    const std::vector<JointMapEntry>& entries,
+    const std::vector<std::uint8_t>& values) {
+  const std::size_t output_width = projection_width(entries, false);
+  std::vector<std::uint8_t> projected(output_width, 0U);
+
+  for (const JointMapEntry& entry : entries) {
+    if (!entry.enabled) {
+      continue;
+    }
+    projected[entry.hardware_index] = values[entry.sim_index];
+  }
+
+  return projected;
 }
 
 }
@@ -568,7 +601,9 @@ CommandProjectionResult JointMap::project_command_sim_to_hardware(
   width_ok &= block_field_width_ok(&result.issues, sim_command.joints.stiffness,
                                    sim_width, "command.stiffness");
   width_ok &= block_field_width_ok(&result.issues, sim_command.joints.damping,
-                                   sim_width, "command.damping");
+                                    sim_width, "command.damping");
+  width_ok &= block_field_width_ok(&result.issues, sim_command.joints.motor_mode,
+                                   sim_width, "command.motor_mode");
   if (!width_ok) {
     return result;
   }
@@ -633,6 +668,13 @@ CommandProjectionResult JointMap::project_command_sim_to_hardware(
                          projected.issues.end());
   } else {
     hardware_command.joints.damping.clear();
+  }
+
+  if (!sim_command.joints.motor_mode.empty()) {
+    hardware_command.joints.motor_mode =
+        project_motor_modes_sim_to_hardware(entries_, sim_command.joints.motor_mode);
+  } else {
+    hardware_command.joints.motor_mode.clear();
   }
 
   result.command = std::move(hardware_command);

@@ -105,6 +105,9 @@ CommandFrame MakeCommand() {
   command.joints.effort.assign(29, 0.75);
   command.joints.stiffness.assign(29, 10.0);
   command.joints.damping.assign(29, 1.5);
+  command.joints.motor_mode.assign(29, 1U);
+  command.joints.motor_mode[0] = 7U;
+  command.joints.motor_mode[1] = 0U;
   return command;
 }
 
@@ -208,7 +211,7 @@ void TestExplicitImuTopicOverridesEmbeddedImu() {
   AssertClose(read.state->imu->linear_acceleration_xyz.at(2), 8.3);
 }
 
-void TestWriteCommandPacksLowCmdUsingLatestLowStateModeMachine() {
+void TestWriteCommandPacksLowCmdUsingCommandModeMachineAndMotorModes() {
   UnitreeG1LowLevelSession session(MakeConfig());
   assert(session.initialize().status == AdapterCallStatus::kOk);
 
@@ -222,8 +225,9 @@ void TestWriteCommandPacksLowCmdUsingLatestLowStateModeMachine() {
   assert(session.last_packed_command().has_value());
   const auto& low_cmd = *session.last_packed_command();
   assert(low_cmd.mode_pr() == 5);
-  assert(low_cmd.mode_machine() == 33);
-  assert(low_cmd.motor_cmd().at(0).mode() == 1);
+  assert(low_cmd.mode_machine() == 99);
+  assert(low_cmd.motor_cmd().at(0).mode() == 7);
+  assert(low_cmd.motor_cmd().at(1).mode() == 0);
   AssertClose(low_cmd.motor_cmd().at(0).q(), 0.25);
   AssertClose(low_cmd.motor_cmd().at(0).dq(), 0.5);
   AssertClose(low_cmd.motor_cmd().at(0).tau(), 0.75);
@@ -268,7 +272,7 @@ void TestWriteCommandPrintsCommandInfoOncePerSecond() {
   const std::string output((std::istreambuf_iterator<char>(log)),
                            std::istreambuf_iterator<char>());
   assert(CountOccurrences(output, "[UnitreeG1LowLevelSession.write_command] ========== Command ==========") == 2U);
-  assert(output.find("sequence=0 mode_label=torque mode_pr=5 mode_machine=0 joints=29") !=
+  assert(output.find("sequence=0 mode_label=torque mode_pr=5 mode_machine=99 joints=29") !=
          std::string::npos);
   assert(output.find("idx        q        dq       tau        kp        kd") !=
          std::string::npos);
@@ -369,7 +373,7 @@ int main() {
   TestReadStateRequiresCachedLowState();
   TestReadStateRetriesUntilLowStateArrives();
   TestExplicitImuTopicOverridesEmbeddedImu();
-  TestWriteCommandPacksLowCmdUsingLatestLowStateModeMachine();
+  TestWriteCommandPacksLowCmdUsingCommandModeMachineAndMotorModes();
   TestWriteCommandPrintsCommandInfoOncePerSecond();
   TestInvalidCrcLowStateIsRejectedWhenVerificationEnabled();
   TestInitializeFailsWhenMotionReleaseCannotBeSatisfied();

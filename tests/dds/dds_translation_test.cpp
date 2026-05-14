@@ -87,11 +87,13 @@ LowCmd_ MakeLowCmd() {
   message.reserve(reserve);
 
   auto motors = message.motor_cmd();
+  motors[0].mode(7U);
   motors[0].q(1.0F);
   motors[0].dq(3.0F);
   motors[0].tau(5.0F);
   motors[0].kp(7.0F);
   motors[0].kd(9.0F);
+  motors[1].mode(0U);
   motors[1].q(2.0F);
   motors[1].dq(4.0F);
   motors[1].tau(6.0F);
@@ -111,6 +113,7 @@ void RecomputeLowCmdCrc(LowCmd_& message) {
 StateFrame MakeHardwareState() {
   StateFrame state;
   state.sequence = 20U;
+  state.tick = 20U;
   state.sample_time_ns = 1000U;
   state.publish_time_ns = 1010U;
   state.mode_pr = 9U;
@@ -162,6 +165,9 @@ void TestTranslateLowCmdToCommand() {
   assert(translated.command->joints.effort[0] == 5.0);
   assert(translated.command->joints.stiffness[0] == 7.0);
   assert(translated.command->joints.damping[1] == 10.0);
+  assert(translated.command->joints.motor_mode.size() == 35U);
+  assert(translated.command->joints.motor_mode[0] == 7U);
+  assert(translated.command->joints.motor_mode[1] == 0U);
 }
 
 void TestTranslateLowCmdToHardwareCommandThroughJointMap() {
@@ -176,6 +182,9 @@ void TestTranslateLowCmdToHardwareCommandThroughJointMap() {
   assert(translated.command->joints.position[1] == 1.0);
   assert(translated.command->joints.velocity[0] == 4.0);
   assert(translated.command->joints.velocity[1] == 3.0);
+  assert(translated.command->joints.motor_mode.size() == 2U);
+  assert(translated.command->joints.motor_mode[0] == 0U);
+  assert(translated.command->joints.motor_mode[1] == 7U);
 }
 
 void TestTranslateHardwareStateToLowStateThroughJointMap() {

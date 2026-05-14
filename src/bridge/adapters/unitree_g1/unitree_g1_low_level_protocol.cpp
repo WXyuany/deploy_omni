@@ -46,10 +46,18 @@ unitree_hg::msg::dds_::LowCmd_ build_low_cmd_from_command(
   const std::size_t width = std::min<std::size_t>(
       std::min<std::size_t>(hardware_slot_count, command.joints.width()),
       kUnitreeHgMotorSlotCount);
+  const bool has_valid_motor_modes =
+      command.joints.motor_mode.empty() || command.joints.motor_mode.size() >= width;
+  if (!has_valid_motor_modes) {
+    apply_crc(low_cmd);
+    return low_cmd;
+  }
 
   for (std::size_t index = 0; index < width; ++index) {
     auto& motor = low_cmd.motor_cmd().at(index);
-    motor.mode() = 1;
+    motor.mode() = command.joints.motor_mode.empty()
+                       ? 1U
+                       : command.joints.motor_mode.at(index);
     motor.q() = command.joints.position.empty()
                     ? 0.0F
                     : static_cast<float>(command.joints.position.at(index));

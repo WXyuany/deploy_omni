@@ -21,6 +21,9 @@ CommandFrame MakePackedCommand() {
   command.joints.effort.assign(29, 3.25);
   command.joints.stiffness.assign(29, 4.25);
   command.joints.damping.assign(29, 5.25);
+  command.joints.motor_mode.assign(29, 1U);
+  command.joints.motor_mode[0] = 7U;
+  command.joints.motor_mode[1] = 0U;
   return command;
 }
 
@@ -32,7 +35,8 @@ void TestBuildLowCmdPacksActiveSlotsAndCrc() {
 
   for (std::size_t index = 0; index < 29; ++index) {
     const auto& motor = low_cmd.motor_cmd().at(index);
-    assert(motor.mode() == 1);
+    const std::uint8_t expected_mode = index == 0 ? 7U : index == 1 ? 0U : 1U;
+    assert(motor.mode() == expected_mode);
     assert(motor.q() == 1.25F);
     assert(motor.dq() == 2.25F);
     assert(motor.tau() == 3.25F);
@@ -98,6 +102,38 @@ void TestBuildLowCmdTreatsMissingPositionBlockAsZero() {
   }
 }
 
+void TestBuildLowCmdTreatsMismatchedMotorModeWidthAsDisabled() {
+  CommandFrame command;
+  command.valid = true;
+  command.mode_pr = 6;
+  command.joints.position.assign(29, 1.0);
+  command.joints.motor_mode.assign(28, 7U);
+  const auto low_cmd = build_low_cmd_from_command(command, 29, 8);
+  for (std::size_t index = 0; index < 29; ++index) {
+    assert(low_cmd.motor_cmd().at(index).mode() == 0U);
+  }
+}
+
+void TestBuildLowCmdUsesPrefixWhenMotorModeVectorIsWiderThanHardwareSlots() {
+  CommandFrame command = MakePackedCommand();
+  command.joints.position.assign(35, 1.0);
+  command.joints.velocity.assign(35, 2.0);
+  command.joints.effort.assign(35, 3.0);
+  command.joints.stiffness.assign(35, 4.0);
+  command.joints.damping.assign(35, 5.0);
+  command.joints.motor_mode.assign(35, 1U);
+  command.joints.motor_mode[0] = 7U;
+  command.joints.motor_mode[1] = 0U;
+  command.joints.motor_mode[29] = 9U;
+
+  const auto low_cmd = build_low_cmd_from_command(command, 29, 8);
+
+  assert(low_cmd.motor_cmd().at(0).mode() == 7U);
+  assert(low_cmd.motor_cmd().at(1).mode() == 0U);
+  assert(low_cmd.motor_cmd().at(28).mode() == 1U);
+  assert(low_cmd.motor_cmd().at(29).mode() == 0U);
+}
+
 void TestValidateLowStateCrcAcceptsWellFormedState() {
   LowState_ state;
   state.mode_pr() = 1;
@@ -115,6 +151,8 @@ int main() {
   TestBuildSafeLowCmdZerosAllSlots();
   TestBuildLowCmdTreatsMissingOptionalBlocksAsZero();
   TestBuildLowCmdTreatsMissingPositionBlockAsZero();
+  TestBuildLowCmdTreatsMismatchedMotorModeWidthAsDisabled();
+  TestBuildLowCmdUsesPrefixWhenMotorModeVectorIsWiderThanHardwareSlots();
   TestValidateLowStateCrcAcceptsWellFormedState();
   return 0;
 }

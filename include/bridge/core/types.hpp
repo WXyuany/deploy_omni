@@ -84,6 +84,7 @@ struct JointCommandBlock {
   std::vector<double> effort;
   std::vector<double> stiffness;
   std::vector<double> damping;
+  std::vector<std::uint8_t> motor_mode;
 
   [[nodiscard]] std::size_t width() const noexcept {
     if (!position.empty()) {
@@ -98,7 +99,10 @@ struct JointCommandBlock {
     if (!stiffness.empty()) {
       return stiffness.size();
     }
-    return damping.size();
+    if (!damping.empty()) {
+      return damping.size();
+    }
+    return motor_mode.size();
   }
 };
 
