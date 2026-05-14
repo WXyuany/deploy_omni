@@ -1,6 +1,12 @@
 #include <cassert>
+#include <chrono>
+#include <cstdio>
+#include <fstream>
 #include <cmath>
 #include <string>
+#include <thread>
+
+#include <unistd.h>
 
 #include "../../include/bridge/adapters/unitree_g1/unitree_g1_low_level_session.hpp"
 #include <unitree/idl/hg/IMUState_.hpp>
@@ -27,8 +33,11 @@ LowLevelSessionConfig MakeConfig() {
   config.imu_topic = "rt/secondary_imu";
   config.initialize_timeout_ns = 10;
   config.read_timeout_ns = 20;
+  config.read_retry_attempts = 0;
+  config.read_retry_interval_ns = 0;
   config.write_timeout_ns = 30;
   config.stale_state_after_ns = 100;
+  config.require_motion_release = false;
   config.hardware_slot_count = 29;
   return config;
 }
@@ -113,6 +122,9 @@ void FillLowState(LowState_& state) {
   state.imu_state().gyroscope() = {0.1F, 0.2F, 0.3F};
   state.imu_state().accelerometer() = {1.1F, 1.2F, 1.3F};
   state.imu_state().rpy() = {0.4F, 0.5F, 0.6F};
+  for (std::size_t i = 0; i < state.wireless_remote().size(); ++i) {
+    state.wireless_remote().at(i) = static_cast<uint8_t>(i + 1);
+  }
 }
 
 void TestReadStateUsesInjectedLowStateCache() {
@@ -128,6 +140,7 @@ void TestReadStateUsesInjectedLowStateCache() {
   assert(read.state.has_value());
   assert(read.state->mode_pr == 7);
   assert(read.state->mode_machine == 19);
+  assert(read.state->tick == 1234U);
   assert(read.state->position.size() == 29U);
   AssertClose(read.state->position.at(0), 0.5);
   AssertClose(read.state->velocity.at(1), 2.5);
@@ -137,6 +150,9 @@ void TestReadStateUsesInjectedLowStateCache() {
   AssertClose(read.state->imu->orientation_xyzw.at(0), 1.0);
   AssertClose(read.state->imu->angular_velocity_xyz.at(1), 0.2);
   AssertClose(read.state->imu->linear_acceleration_xyz.at(2), 1.3);
+  assert(read.state->wireless_remote.size() == state.wireless_remote().size());
+  assert(read.state->wireless_remote.at(0) == 1U);
+  assert(read.state->wireless_remote.at(39) == 40U);
 }
 
 void TestReadStateRequiresCachedLowState() {
@@ -146,6 +162,26 @@ void TestReadStateRequiresCachedLowState() {
   const auto read = session.read_state();
   assert(read.result.status == AdapterCallStatus::kRetryableError);
   assert(!read.state.has_value());
+}
+
+void TestReadStateRetriesUntilLowStateArrives() {
+  auto config = MakeConfig();
+  config.read_retry_attempts = 5;
+  config.read_retry_interval_ns = 1'000'000;
+  UnitreeG1LowLevelSession session(config);
+  assert(session.initialize().status == AdapterCallStatus::kOk);
+
+  std::thread delayed_state([&session]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    LowState_ state;
+    FillLowState(state);
+    session.handle_low_state_message(state);
+  });
+
+  const auto read = session.read_state();
+  delayed_state.join();
+  assert(read.result.status == AdapterCallStatus::kOk);
+  assert(read.state.has_value());
 }
 
 void TestExplicitImuTopicOverridesEmbeddedImu() {
@@ -194,6 +230,50 @@ void TestWriteCommandPacksLowCmdUsingLatestLowStateModeMachine() {
   AssertClose(low_cmd.motor_cmd().at(0).kp(), 10.0);
   AssertClose(low_cmd.motor_cmd().at(0).kd(), 1.5);
   assert(low_cmd.crc() != 0U);
+}
+
+std::size_t CountOccurrences(const std::string& text, const std::string& needle) {
+  std::size_t count = 0;
+  std::size_t position = 0;
+  while ((position = text.find(needle, position)) != std::string::npos) {
+    ++count;
+    position += needle.size();
+  }
+  return count;
+}
+
+void TestWriteCommandPrintsCommandInfoOncePerSecond() {
+  auto config = MakeConfig();
+  config.write_timeout_ns = 500'000'000ULL;
+  UnitreeG1LowLevelSession session(config);
+  assert(session.initialize().status == AdapterCallStatus::kOk);
+
+  const char* log_path = "/tmp/opencode/g1_write_command_print_test.log";
+  std::remove(log_path);
+  const int saved_stderr = dup(fileno(stderr));
+  assert(saved_stderr >= 0);
+  assert(freopen(log_path, "w", stderr) != nullptr);
+
+  auto command = MakeCommand();
+  assert(session.write_command(command).status == AdapterCallStatus::kOk);
+  assert(session.write_command(command).status == AdapterCallStatus::kOk);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  assert(session.write_command(command).status == AdapterCallStatus::kOk);
+  std::fflush(stderr);
+
+  assert(dup2(saved_stderr, fileno(stderr)) >= 0);
+  close(saved_stderr);
+
+  std::ifstream log(log_path);
+  const std::string output((std::istreambuf_iterator<char>(log)),
+                           std::istreambuf_iterator<char>());
+  assert(CountOccurrences(output, "[UnitreeG1LowLevelSession.write_command] ========== Command ==========") == 2U);
+  assert(output.find("sequence=0 mode_label=torque mode_pr=5 mode_machine=0 joints=29") !=
+         std::string::npos);
+  assert(output.find("idx        q        dq       tau        kp        kd") !=
+         std::string::npos);
+  assert(output.find("  0   0.2500   0.5000   0.7500  10.0000   1.5000") !=
+         std::string::npos);
 }
 
 void TestInvalidCrcLowStateIsRejectedWhenVerificationEnabled() {
@@ -287,8 +367,10 @@ void TestHealthReportsDegradedWhenCachedStateGoesStale() {
 int main() {
   TestReadStateUsesInjectedLowStateCache();
   TestReadStateRequiresCachedLowState();
+  TestReadStateRetriesUntilLowStateArrives();
   TestExplicitImuTopicOverridesEmbeddedImu();
   TestWriteCommandPacksLowCmdUsingLatestLowStateModeMachine();
+  TestWriteCommandPrintsCommandInfoOncePerSecond();
   TestInvalidCrcLowStateIsRejectedWhenVerificationEnabled();
   TestInitializeFailsWhenMotionReleaseCannotBeSatisfied();
   TestInitializeSucceedsWhenMotionReleaseCompletes();

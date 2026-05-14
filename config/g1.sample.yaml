@@ -34,7 +34,7 @@ adapter:
   command_mode: raw_low_level
   connection:
     transport: dds
-    interface_hint: wlo1
+    interface_hint: wlp0s20f3
   startup:
     read_initial_state_timeout_ms: 1000
     require_healthy_hardware: true

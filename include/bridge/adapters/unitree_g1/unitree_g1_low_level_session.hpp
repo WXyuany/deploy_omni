@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -32,6 +34,8 @@ struct LowLevelSessionConfig {
   std::string imu_topic;
   std::uint64_t initialize_timeout_ns{0};
   std::uint64_t read_timeout_ns{0};
+  std::uint32_t read_retry_attempts{10};
+  std::uint64_t read_retry_interval_ns{1000000000ULL};
   std::uint64_t write_timeout_ns{0};
   std::uint64_t stale_state_after_ns{0};
   bool require_motion_release{true};
@@ -43,6 +47,7 @@ struct LowLevelSessionConfig {
 
 struct LowLevelSessionState {
   std::uint64_t sample_time_ns{0};
+  std::uint32_t tick{0};
   std::uint8_t mode_pr{0};
   std::uint8_t mode_machine{0};
   bool valid{false};
@@ -52,6 +57,7 @@ struct LowLevelSessionState {
   std::vector<double> velocity;
   std::vector<double> effort;
   std::vector<double> acceleration;
+  std::array<std::uint8_t, 40> wireless_remote{};
   std::optional<bridge::core::ImuSample> imu;
   std::optional<bridge::core::BridgeFault> fault;
 };
@@ -64,6 +70,7 @@ struct LowLevelSessionReadResult {
 class UnitreeG1LowLevelSession {
  public:
   explicit UnitreeG1LowLevelSession(LowLevelSessionConfig config);
+  ~UnitreeG1LowLevelSession();
 
   [[nodiscard]] const LowLevelSessionConfig& config() const noexcept;
   [[nodiscard]] bridge::core::AdapterCallResult initialize();
@@ -92,6 +99,7 @@ class UnitreeG1LowLevelSession {
   std::uint64_t last_low_state_time_ns_{0};
   std::uint64_t last_read_time_ns_{0};
   std::uint64_t last_write_time_ns_{0};
+  std::chrono::steady_clock::time_point last_command_print_time_{};
   std::optional<unitree_hg::msg::dds_::LowCmd_> last_packed_command_;
   std::optional<unitree_hg::msg::dds_::LowState_> latest_low_state_;
   std::optional<unitree_hg::msg::dds_::IMUState_> latest_imu_state_;
@@ -109,6 +117,12 @@ class UnitreeG1LowLevelSession {
   std::atomic<bool> writer_started_{false};
   std::mutex cmd_mutex_;
   std::optional<unitree_hg::msg::dds_::LowCmd_> pending_cmd_;
+
+  void reader_loop();
+  std::thread reader_thread_;
+  std::atomic<bool> stop_reader_{false};
+  std::mutex state_buffer_mutex_;
+  std::optional<LowLevelSessionState> buffered_state_;
 
   std::vector<double> position_;
   std::vector<double> velocity_;

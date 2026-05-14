@@ -1,6 +1,7 @@
 #include "../../../include/bridge/dds/dds_command_ingress.hpp"
 
 #include <chrono>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
@@ -97,10 +98,14 @@ void DdsCommandIngress::handle_command(const unitree_hg::msg::dds_::LowCmd_& mes
   if (command_sink_ == nullptr) {
     return;
   }
-
+  //std::cout<<"receive dds low cmd!!!!!!!!!!!!"<<std::endl;
   const CommandTranslation translated = translate_lowcmd_to_hardware_command(
       message, receive_time_ns, dependencies_.joint_map);
   if (!translated.result.succeeded()) {
+    std::fprintf(stderr,
+                 "dds command ingress rejected LowCmd: detail=%s mode_machine=%u crc=%u\n",
+                 translated.result.detail.c_str(), message.mode_machine(),
+                 message.crc());
     if (event_sink_ != nullptr && translated.result.fault.has_value()) {
       [[maybe_unused]] const auto ignored =
           event_sink_->report_transport_fault(*translated.result.fault);
@@ -110,7 +115,13 @@ void DdsCommandIngress::handle_command(const unitree_hg::msg::dds_::LowCmd_& mes
 
   const core::CommandSubmissionResult submission =
       command_sink_->submit_latest_command(*translated.command);
-  [[maybe_unused]] const auto ignored = submission;
+  if (!submission.result.succeeded()) {
+    std::fprintf(stderr,
+                 "dds command ingress submission rejected: detail=%s sequence=%llu mode=%u\n",
+                 submission.result.detail.c_str(),
+                 static_cast<unsigned long long>(translated.command->sequence),
+                 message.mode_machine());
+  }
 }
 
 }  // namespace bridge::dds

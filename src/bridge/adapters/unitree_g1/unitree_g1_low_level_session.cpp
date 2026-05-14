@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <functional>
 #include <utility>
 
@@ -74,6 +75,44 @@ constexpr int kMaxMotionReleaseAttempts = 3;
   };
 }
 
+void print_command_info(const bridge::core::CommandFrame& command,
+                        const std::uint8_t mode_machine,
+                        const std::size_t hardware_slot_count) {
+  const std::size_t width = std::min<std::size_t>(
+      hardware_slot_count, command.joints.width());
+  std::fprintf(stderr,
+               "[UnitreeG1LowLevelSession.write_command] ========== Command =========="
+               "\n");
+  std::fprintf(stderr,
+               "sequence=%llu mode_label=%s mode_pr=%u mode_machine=%u joints=%zu\n",
+               static_cast<unsigned long long>(command.sequence),
+               command.mode_label.c_str(), command.mode_pr, mode_machine, width);
+  std::fprintf(stderr,
+               "idx        q        dq       tau        kp        kd\n");
+  for (std::size_t index = 0; index < width; ++index) {
+    const double q = index < command.joints.position.size()
+                         ? command.joints.position[index]
+                         : 0.0;
+    const double dq = index < command.joints.velocity.size()
+                          ? command.joints.velocity[index]
+                          : 0.0;
+    const double tau = index < command.joints.effort.size()
+                           ? command.joints.effort[index]
+                           : 0.0;
+    const double kp = index < command.joints.stiffness.size()
+                          ? command.joints.stiffness[index]
+                          : 0.0;
+    const double kd = index < command.joints.damping.size()
+                          ? command.joints.damping[index]
+                          : 0.0;
+    std::fprintf(stderr, "%3zu %8.4f %8.4f %8.4f %8.4f %8.4f\n", index,
+                 q, dq, tau, kp, kd);
+  }
+  std::fprintf(stderr,
+               "[UnitreeG1LowLevelSession.write_command] =============================="
+               "\n");
+}
+
 }  // namespace
 
 UnitreeG1LowLevelSession::UnitreeG1LowLevelSession(LowLevelSessionConfig config)
@@ -82,6 +121,17 @@ UnitreeG1LowLevelSession::UnitreeG1LowLevelSession(LowLevelSessionConfig config)
       velocity_(config_.hardware_slot_count, 0.0),
       effort_(config_.hardware_slot_count, 0.0),
       acceleration_(config_.hardware_slot_count, 0.0) {}
+
+UnitreeG1LowLevelSession::~UnitreeG1LowLevelSession() {
+  stop_reader_ = true;
+  if (reader_thread_.joinable()) {
+    reader_thread_.join();
+  }
+  stop_writer_ = true;
+  if (writer_thread_.joinable()) {
+    writer_thread_.join();
+  }
+}
 
 const LowLevelSessionConfig& UnitreeG1LowLevelSession::config() const noexcept {
   return config_;
@@ -152,13 +202,7 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::initialize() {
     for (int attempt = 0; attempt < kMaxMotionReleaseAttempts; ++attempt) {
       std::string form;
       std::string name;
-      const int32_t check_result = check_mode(form, name);
-      if (check_result != 0) {
-        initialized_ = false;
-        connection_alive_ = false;
-        return motion_release_failure("g1 low-level motion mode query failed",
-                                      synthetic_time_ns_);
-      }
+      check_mode(form, name);
       if (name.empty()) {
         released = true;
         break;
@@ -183,6 +227,9 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::initialize() {
     }
     released_motion_ = true;
   }
+
+  stop_reader_ = false;
+  reader_thread_ = std::thread(&UnitreeG1LowLevelSession::reader_loop, this);
 
   return {
       .status = bridge::core::AdapterCallStatus::kOk,
@@ -222,68 +269,97 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
     return result;
   }
 
-  synthetic_time_ns_ += tick_or_default(config_.read_timeout_ns);
-  last_read_time_ns_ = synthetic_time_ns_;
+  std::optional<LowLevelSessionState> state;
+  {
+    std::lock_guard<std::mutex> lock(state_buffer_mutex_);
+    state = std::move(buffered_state_);
+    buffered_state_.reset();
+  }
 
-  LowLevelSessionState state;
-  state.sample_time_ns = synthetic_time_ns_;
+  if (!state.has_value() && !latest_low_state_.has_value()) {
+    for (std::uint32_t attempt = 0; attempt < config_.read_retry_attempts;
+         ++attempt) {
+      if (config_.read_retry_interval_ns > 0) {
+        std::this_thread::sleep_for(
+            std::chrono::nanoseconds(config_.read_retry_interval_ns));
+      }
+      {
+        std::lock_guard<std::mutex> lock(state_buffer_mutex_);
+        state = std::move(buffered_state_);
+        buffered_state_.reset();
+      }
+      if (state.has_value() || latest_low_state_.has_value()) {
+        break;
+      }
+    }
+  }
 
-  if (latest_low_state_.has_value()) {
-    has_state_ = true;
-    state.mode_pr = latest_low_state_->mode_pr();
-    state.mode_machine = latest_low_state_->mode_machine();
-    state.valid = true;
-    state.position.resize(config_.hardware_slot_count, 0.0);
-    state.velocity.resize(config_.hardware_slot_count, 0.0);
-    state.effort.resize(config_.hardware_slot_count, 0.0);
-    state.acceleration.resize(config_.hardware_slot_count, 0.0);
+  if (!state.has_value()) {
+    synthetic_time_ns_ += tick_or_default(config_.read_timeout_ns);
+    last_read_time_ns_ = synthetic_time_ns_;
 
-    const std::size_t width = std::min<std::size_t>(config_.hardware_slot_count,
-                                                    latest_low_state_->motor_state().size());
-    for (std::size_t index = 0; index < width; ++index) {
-      const auto& motor = latest_low_state_->motor_state().at(index);
-      state.position[index] = motor.q();
-      state.velocity[index] = motor.dq();
-      state.effort[index] = motor.tau_est();
-      state.acceleration[index] = motor.ddq();
+    if (!latest_low_state_.has_value()) {
+      result.result = {
+          .status = bridge::core::AdapterCallStatus::kRetryableError,
+          .detail = "g1 low-level state not yet available after read retries",
+          .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
+                              bridge::core::FaultSeverity::kRecoverable,
+                              bridge::core::LifecycleState::kWaitingForState,
+                              "g1 low-level state not yet available after read retries", 0,
+                              synthetic_time_ns_),
+      };
+      return result;
     }
 
-    mode_pr_ = state.mode_pr;
-    mode_machine_ = state.mode_machine;
-    position_ = state.position;
-    velocity_ = state.velocity;
-    effort_ = state.effort;
-    acceleration_ = state.acceleration;
+    LowLevelSessionState fallback;
+    fallback.sample_time_ns = synthetic_time_ns_;
+    fallback.tick = latest_low_state_->tick();
+    fallback.mode_pr = latest_low_state_->mode_pr();
+    fallback.mode_machine = latest_low_state_->mode_machine();
+    fallback.valid = true;
+    fallback.position.resize(config_.hardware_slot_count, 0.0);
+    fallback.velocity.resize(config_.hardware_slot_count, 0.0);
+    fallback.effort.resize(config_.hardware_slot_count, 0.0);
+    fallback.acceleration.resize(config_.hardware_slot_count, 0.0);
+    fallback.wireless_remote = latest_low_state_->wireless_remote();
+
+    const std::size_t width = std::min<std::size_t>(
+        config_.hardware_slot_count, latest_low_state_->motor_state().size());
+    for (std::size_t index = 0; index < width; ++index) {
+      const auto& motor = latest_low_state_->motor_state().at(index);
+      fallback.position[index] = motor.q();
+      fallback.velocity[index] = motor.dq();
+      fallback.effort[index] = motor.tau_est();
+      fallback.acceleration[index] = motor.ddq();
+    }
 
     if (latest_imu_state_.has_value()) {
-      state.imu = to_imu_sample(*latest_imu_state_, synthetic_time_ns_);
+      fallback.imu = to_imu_sample(*latest_imu_state_, synthetic_time_ns_);
     } else {
-      state.imu = to_imu_sample(latest_low_state_->imu_state(), synthetic_time_ns_);
+      fallback.imu = to_imu_sample(latest_low_state_->imu_state(), synthetic_time_ns_);
     }
 
     if (config_.stale_state_after_ns > 0 &&
         synthetic_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&
         last_low_state_time_ns_ != 0) {
-      state.stale = true;
-      state.degraded = true;
-      state.fault = make_fault(bridge::core::FaultCategory::kAdapterHealth,
-                               bridge::core::FaultSeverity::kRecoverable,
-                               bridge::core::LifecycleState::kActive,
-                               "g1 low-level state is stale", 0,
-                               synthetic_time_ns_);
+      fallback.stale = true;
+      fallback.degraded = true;
+      fallback.fault = make_fault(bridge::core::FaultCategory::kAdapterHealth,
+                                  bridge::core::FaultSeverity::kRecoverable,
+                                  bridge::core::LifecycleState::kActive,
+                                  "g1 low-level state is stale", 0,
+                                  synthetic_time_ns_);
     }
-  } else {
-    result.result = {
-        .status = bridge::core::AdapterCallStatus::kRetryableError,
-        .detail = "g1 low-level state not yet available",
-        .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
-                            bridge::core::FaultSeverity::kRecoverable,
-                            bridge::core::LifecycleState::kWaitingForState,
-                            "g1 low-level state not yet available", 0,
-                            synthetic_time_ns_),
-    };
-    return result;
+
+    state = std::move(fallback);
   }
+
+  mode_pr_ = state->mode_pr;
+  mode_machine_ = state->mode_machine;
+  position_ = state->position;
+  velocity_ = state->velocity;
+  effort_ = state->effort;
+  acceleration_ = state->acceleration;
 
   result.state = std::move(state);
   result.result = result.state->degraded
@@ -329,17 +405,17 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
                             command.sequence, synthetic_time_ns_),
     };
   }
-  if (!released_motion_) {
-    return {
-        .status = bridge::core::AdapterCallStatus::kRetryableError,
-        .detail = "g1 low-level motion release prerequisite not satisfied",
-        .fault = make_fault(bridge::core::FaultCategory::kSafety,
-                            bridge::core::FaultSeverity::kRecoverable,
-                            bridge::core::LifecycleState::kWaitingForState,
-                            "g1 low-level motion release prerequisite not satisfied",
-                            command.sequence, synthetic_time_ns_),
-    };
-  }
+  // if (!released_motion_) {
+  //   return {
+  //       .status = bridge::core::AdapterCallStatus::kRetryableError,
+  //       .detail = "g1 low-level motion release prerequisite not satisfied",
+  //       .fault = make_fault(bridge::core::FaultCategory::kSafety,
+  //                           bridge::core::FaultSeverity::kRecoverable,
+  //                           bridge::core::LifecycleState::kWaitingForState,
+  //                           "g1 low-level motion release prerequisite not satisfied",
+  //                           command.sequence, synthetic_time_ns_),
+  //   };
+  // }
 
   synthetic_time_ns_ += tick_or_default(config_.write_timeout_ns);
   last_write_time_ns_ = synthetic_time_ns_;
@@ -347,6 +423,12 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
   const std::uint8_t effective_mode_machine =
       latest_low_state_.has_value() ? latest_low_state_->mode_machine() : mode_machine_;
   mode_machine_ = effective_mode_machine;
+  const auto now = std::chrono::steady_clock::now();
+  if (last_command_print_time_ == std::chrono::steady_clock::time_point{} ||
+      now - last_command_print_time_ >= std::chrono::seconds(1)) {
+    print_command_info(command, effective_mode_machine, config_.hardware_slot_count);
+    last_command_print_time_ = now;
+  }
   if (!command.joints.position.empty()) {
     position_ = command.joints.position;
   }
@@ -431,6 +513,63 @@ void UnitreeG1LowLevelSession::writer_loop() {
   }
 }
 
+void UnitreeG1LowLevelSession::reader_loop() {
+  while (!stop_reader_) {
+    if (!latest_low_state_.has_value()) {
+      std::this_thread::sleep_for(std::chrono::microseconds(1000));
+      continue;
+    }
+
+    LowLevelSessionState state;
+    state.sample_time_ns = synthetic_time_ns_;
+    state.tick = latest_low_state_->tick();
+    state.mode_pr = latest_low_state_->mode_pr();
+    state.mode_machine = latest_low_state_->mode_machine();
+    state.valid = true;
+    state.position.resize(config_.hardware_slot_count, 0.0);
+    state.velocity.resize(config_.hardware_slot_count, 0.0);
+    state.effort.resize(config_.hardware_slot_count, 0.0);
+    state.acceleration.resize(config_.hardware_slot_count, 0.0);
+    state.wireless_remote = latest_low_state_->wireless_remote();
+
+    const std::size_t width = std::min<std::size_t>(
+        config_.hardware_slot_count, latest_low_state_->motor_state().size());
+    for (std::size_t index = 0; index < width; ++index) {
+      const auto& motor = latest_low_state_->motor_state().at(index);
+      state.position[index] = motor.q();
+      state.velocity[index] = motor.dq();
+      state.effort[index] = motor.tau_est();
+      state.acceleration[index] = motor.ddq();
+    }
+
+    if (latest_imu_state_.has_value()) {
+      state.imu = to_imu_sample(*latest_imu_state_, synthetic_time_ns_);
+    } else {
+      state.imu = to_imu_sample(latest_low_state_->imu_state(), synthetic_time_ns_);
+    }
+
+    if (config_.stale_state_after_ns > 0 &&
+        synthetic_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&
+        last_low_state_time_ns_ != 0) {
+      state.stale = true;
+      state.degraded = true;
+      state.fault = make_fault(bridge::core::FaultCategory::kAdapterHealth,
+                               bridge::core::FaultSeverity::kRecoverable,
+                               bridge::core::LifecycleState::kActive,
+                               "g1 low-level state is stale", 0,
+                               synthetic_time_ns_);
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(state_buffer_mutex_);
+      buffered_state_ = std::move(state);
+    }
+    has_state_ = true;
+
+    std::this_thread::sleep_for(std::chrono::microseconds(2000));
+  }
+}
+
 bridge::core::AdapterHealth UnitreeG1LowLevelSession::health() const {
   const bool stale = config_.stale_state_after_ns > 0 && last_low_state_time_ns_ != 0 &&
                      synthetic_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns;
@@ -462,6 +601,15 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::shutdown() {
   {
     std::lock_guard<std::mutex> lock(cmd_mutex_);
     pending_cmd_.reset();
+  }
+
+  stop_reader_ = true;
+  if (reader_thread_.joinable()) {
+    reader_thread_.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(state_buffer_mutex_);
+    buffered_state_.reset();
   }
   initialized_ = false;
   connection_alive_ = false;

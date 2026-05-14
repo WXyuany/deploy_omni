@@ -8,6 +8,7 @@ fi
 
 robot="$1"
 build_dir="${2:-}"
+build_targets=(adapter_bridge)
 
 case "$robot" in
   pm01)
@@ -33,6 +34,7 @@ case "$robot" in
       -DBUILD_ROBOT_PM01=OFF
       -DBUILD_ROBOT_UNITREE_G1=ON
     )
+    build_targets=(adapter_bridge fake_state_publisher state_receiver)
     ;;
   all)
     build_dir="${build_dir:-build}"
@@ -53,4 +55,4 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
 cmake -S "$repo_root" -B "$repo_root/$build_dir" "${configure_args[@]}"
-cmake --build "$repo_root/$build_dir" --target adapter_bridge
+cmake --build "$repo_root/$build_dir" --target "${build_targets[@]:-adapter_bridge}"

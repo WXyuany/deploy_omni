@@ -48,6 +48,8 @@ class UnitreeG1Adapter::Impl {
             .imu_topic = config_.session.imu_topic,
             .initialize_timeout_ns = config_.session.initialize_timeout_ns,
             .read_timeout_ns = config_.session.read_timeout_ns,
+            .read_retry_attempts = config_.session.read_retry_attempts,
+            .read_retry_interval_ns = config_.session.read_retry_interval_ns,
             .write_timeout_ns = config_.session.write_timeout_ns,
             .stale_state_after_ns = config_.session.read_timeout_ns,
             .require_motion_release = config_.session.require_motion_release,
@@ -114,6 +116,7 @@ class UnitreeG1Adapter::Impl {
 
     bridge::core::StateFrame state;
     state.sequence = ++state_sequence_;
+    state.tick = session_read.state->tick;
     state.sample_time_ns = session_read.state->sample_time_ns;
     state.publish_time_ns = session_read.state->sample_time_ns;
     state.mode_pr = session_read.state->mode_pr;
@@ -129,6 +132,7 @@ class UnitreeG1Adapter::Impl {
     state.joints.velocity = session_read.state->velocity;
     state.joints.effort = session_read.state->effort;
     state.joints.acceleration = session_read.state->acceleration;
+    state.wireless_remote = session_read.state->wireless_remote;
     if (session_read.state->imu.has_value()) {
       state.imu = *session_read.state->imu;
     }

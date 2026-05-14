@@ -1,0 +1,113 @@
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <cstdio>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+
+#include <unitree/idl/hg/LowState_.hpp>
+#include <unitree/robot/channel/channel_factory.hpp>
+#include <unitree/robot/channel/channel_subscriber.hpp>
+
+#include "../../include/bridge/adapters/unitree_g1/unitree_g1_gamepad.hpp"
+#include "../../include/bridge/config/bridge_config.hpp"
+
+namespace {
+
+std::atomic<bool> g_stop{false};
+
+void handle_signal(int) { g_stop.store(true); }
+
+[[nodiscard]] bool init_channel_factory(
+    const bridge::config::BridgeStartupConfig& config) {
+  try {
+    if (config.adapter.connection.interface_hint.empty()) {
+      unitree::robot::ChannelFactory::Instance()->Init(
+          static_cast<int32_t>(config.dds.domain_id));
+    } else {
+      unitree::robot::ChannelFactory::Instance()->Init(
+          static_cast<int32_t>(config.dds.domain_id),
+          config.adapter.connection.interface_hint);
+    }
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc > 1 && std::string(argv[1]) == "--help") {
+    std::printf("Usage: %s [config-path]\n", argv[0]);
+    std::printf("Receives external robot state from dds.topics.state in config.\n");
+    return 0;
+  }
+
+  std::signal(SIGINT, handle_signal);
+  std::signal(SIGTERM, handle_signal);
+
+  const std::string config_path =
+      argc > 1 ? std::string(argv[1]) : std::string("config/g1.sample.yaml");
+  const bridge::config::BridgeConfigLoadResult loaded =
+      bridge::config::load_bridge_config(config_path);
+  if (!loaded.succeeded()) {
+    std::fprintf(stderr, "state_receiver config load failed: %s\n",
+                 loaded.detail.c_str());
+    return 1;
+  }
+  if (!init_channel_factory(*loaded.config)) {
+    std::fprintf(stderr, "state_receiver failed to initialize DDS\n");
+    return 2;
+  }
+
+  std::mutex mutex;
+  unitree_hg::msg::dds_::LowState_ latest;
+  std::uint64_t received_count = 0;
+
+  auto subscriber = std::make_unique<
+      unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowState_>>(
+      loaded.config->dds.topics.state);
+  subscriber->InitChannel(
+      [&mutex, &latest, &received_count](const void* message) {
+        if (message == nullptr) {
+          return;
+        }
+        std::lock_guard<std::mutex> lock(mutex);
+        latest = *static_cast<const unitree_hg::msg::dds_::LowState_*>(message);
+        ++received_count;
+      },
+      1);
+
+  std::fprintf(stderr, "state_receiver external_state=%s domain=%u iface=%s\n",
+               loaded.config->dds.topics.state.c_str(),
+               loaded.config->dds.domain_id,
+               loaded.config->adapter.connection.interface_hint.c_str());
+
+  std::uint64_t last_count = 0;
+  bridge::adapters::unitree_g1::G1Gamepad gamepad;
+  while (!g_stop.load()) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::lock_guard<std::mutex> lock(mutex);
+    const std::uint64_t delta = received_count - last_count;
+    last_count = received_count;
+    std::fprintf(stderr,
+                 "received=%llu/s total=%llu mode_pr=%u mode_machine=%u q0=%.4f dq0=%.4f rpy=(%.3f, %.3f, %.3f)\n",
+                 static_cast<unsigned long long>(delta),
+                 static_cast<unsigned long long>(received_count), latest.mode_pr(),
+                  latest.mode_machine(), latest.motor_state().at(0).q(),
+                  latest.motor_state().at(0).dq(), latest.imu_state().rpy()[0],
+                  latest.imu_state().rpy()[1], latest.imu_state().rpy()[2]);
+    bridge::adapters::unitree_g1::update_gamepad_from_wireless_remote(
+        gamepad, latest.wireless_remote());
+    const std::string gamepad_status =
+        bridge::adapters::unitree_g1::format_gamepad_status(gamepad);
+    std::fprintf(stderr, "%s\n", gamepad_status.c_str());
+  }
+
+  subscriber->CloseChannel();
+  return 0;
+}

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -147,6 +148,7 @@ struct CommandFrame {
 
 struct StateFrame {
   std::uint64_t sequence{0};
+  std::uint32_t tick{0};
   std::uint64_t sample_time_ns{0};
   std::uint64_t publish_time_ns{0};
   std::uint8_t mode_pr{0};
@@ -159,6 +161,7 @@ struct StateFrame {
   bool degraded{false};
   bool command_stale{false};
   JointStateBlock joints;
+  std::array<std::uint8_t, 40> wireless_remote{};
   std::optional<ImuSample> imu;
   std::optional<BridgeFault> fault;
 };

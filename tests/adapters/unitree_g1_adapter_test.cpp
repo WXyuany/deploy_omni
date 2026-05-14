@@ -23,6 +23,8 @@ UnitreeG1AdapterConfig MakeBaseConfig() {
   config.session.imu_topic = "rt/secondary_imu";
   config.session.initialize_timeout_ns = 10;
   config.session.read_timeout_ns = 20;
+  config.session.read_retry_attempts = 0;
+  config.session.read_retry_interval_ns = 0;
   config.session.write_timeout_ns = 30;
   config.joint_names = {
       "left_hip_pitch",  "left_hip_roll",   "left_hip_yaw",

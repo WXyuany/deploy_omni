@@ -99,8 +99,8 @@ struct UnitreeG1AdapterConfigBuildResult {
                                      ":" +
                                      startup_config.adapter.connection.interface_hint;
   config.session.control_profile = startup_config.adapter.command_mode;
-  config.session.command_topic = "rt/lowcmd";
-  config.session.state_topic = "rt/lowstate";
+  config.session.command_topic = "custom/mujoco/rt/lowcmd";
+  config.session.state_topic = "custom/mujoco/rt/lowstate";
   config.session.imu_topic = "rt/secondary_imu";
   config.session.initialize_timeout_ns =
       startup_config.adapter.startup.read_initial_state_timeout_ns;

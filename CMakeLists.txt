@@ -289,6 +289,7 @@ if(BUILD_ROBOT_UNITREE_G1)
     src/bridge/adapters/unitree_g1/unitree_g1_low_level_protocol.cpp
     src/bridge/adapters/unitree_g1/unitree_g1_adapter.cpp
     src/bridge/adapters/unitree_g1/unitree_g1_low_level_session.cpp
+    src/bridge/adapters/unitree_g1/unitree_g1_gamepad.cpp
   )
   target_link_libraries(bridge_adapter_unitree_g1 PUBLIC
     bridge_project_options
@@ -335,6 +336,33 @@ target_link_libraries(adapter_bridge PRIVATE
 set_target_properties(adapter_bridge PROPERTIES
   BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
 )
+
+if(BUILD_ROBOT_UNITREE_G1)
+  add_executable(fake_state_publisher
+    src/apps/fake_state_publisher.cpp
+  )
+  target_link_libraries(fake_state_publisher PRIVATE
+    bridge_cyclonedds_options
+    bridge_config
+  )
+  set_target_properties(fake_state_publisher PROPERTIES
+    BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
+  )
+  add_dependencies(fake_state_publisher unitree_sdk2_nomain)
+
+  add_executable(state_receiver
+    src/apps/state_receiver.cpp
+  )
+  target_link_libraries(state_receiver PRIVATE
+    bridge_cyclonedds_options
+    bridge_config
+    bridge_adapter_unitree_g1
+  )
+  set_target_properties(state_receiver PROPERTIES
+    BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
+  )
+  add_dependencies(state_receiver unitree_sdk2_nomain)
+endif()
 
 if(BUILD_TESTING)
   function(bridge_add_test target_name source_file)
@@ -461,6 +489,12 @@ if(BUILD_TESTING)
 
     bridge_add_test(unitree_g1_low_level_protocol_test
       tests/adapters/unitree_g1_low_level_protocol_test.cpp
+      bridge_project_options
+      bridge_adapter_unitree_g1
+    )
+
+    bridge_add_test(unitree_g1_gamepad_test
+      tests/adapters/unitree_g1_gamepad_test.cpp
       bridge_project_options
       bridge_adapter_unitree_g1
     )

@@ -5,7 +5,9 @@
 #include <string>
 #include <vector>
 
+#include <unitree/dds_wrapper/common/crc.h>
 #include "unitree/idl/hg/LowCmd_.hpp"
+#include "unitree/idl/hg/LowState_.hpp"
 
 #include "../../include/bridge/config/joint_map.hpp"
 #include "../../include/bridge/dds/dds_command_ingress.hpp"
@@ -42,6 +44,7 @@ using bridge::dds::create_dds_assembly;
 using bridge::dds::translate_hardware_state_to_lowstate;
 using bridge::dds::translate_lowcmd_to_command;
 using unitree_hg::msg::dds_::LowCmd_;
+using unitree_hg::msg::dds_::LowState_;
 
 constexpr double kTolerance = 1e-9;
 
@@ -102,12 +105,15 @@ LowCmd_ MakeCommandMessage() {
   motors[1].kp(20.0F);
   motors[1].kd(2.0F);
   message.motor_cmd(motors);
+  message.crc(crc32_core(reinterpret_cast<uint32_t*>(&message),
+                         (sizeof(message) >> 2) - 1));
   return message;
 }
 
 StateFrame MakeStateFrame() {
   StateFrame state;
   state.sequence = 77U;
+  state.tick = 1234U;
   state.sample_time_ns = 9000U;
   state.publish_time_ns = 9015U;
   state.mode_pr = 8U;
@@ -200,7 +206,7 @@ void TestEncodeTypedStatePublications() {
   assert(encoded_state.state.has_value());
 
   const auto& state_msg = *encoded_state.state;
-  assert(state_msg.tick() == 77U);
+  assert(state_msg.tick() == 1234U);
   assert(state_msg.mode_pr() == 8U);
   assert(state_msg.mode_machine() == 5U);
   assert(state_msg.motor_state()[0].q() == 0.1F);
@@ -210,6 +216,35 @@ void TestEncodeTypedStatePublications() {
   assert(state_msg.imu_state().rpy()[0] == 0.11F);
   assert(state_msg.imu_state().rpy()[1] == 0.12F);
   assert(state_msg.imu_state().rpy()[2] == 0.13F);
+  auto crc_check = state_msg;
+  assert(state_msg.crc() == crc32_core(reinterpret_cast<uint32_t*>(&crc_check),
+                                       (sizeof(LowState_) >> 2) - 1));
+}
+
+void TestEncodeTypedStateKeepsZeroTick() {
+  JointMap joint_map = MakeJointMap();
+  auto state = MakeStateFrame();
+  state.sequence = 88U;
+  state.tick = 0U;
+
+  const StateTranslation encoded_state =
+      translate_hardware_state_to_lowstate(state, joint_map);
+  assert(encoded_state.result.succeeded());
+  assert(encoded_state.state.has_value());
+  assert(encoded_state.state->tick() == 0U);
+}
+
+void TestEncodeTypedStateKeepsZeroModeMachine() {
+  JointMap joint_map = MakeJointMap();
+  auto state = MakeStateFrame();
+  state.mode_machine = 0U;
+  state.active_mode = ControlMode::kHybrid;
+
+  const StateTranslation encoded_state =
+      translate_hardware_state_to_lowstate(state, joint_map);
+  assert(encoded_state.result.succeeded());
+  assert(encoded_state.state.has_value());
+  assert(encoded_state.state->mode_machine() == 0U);
 }
 
 void TestDdsFactoryCreatesAssembly() {
@@ -288,6 +323,8 @@ void TestStateEgressRejectsInvalidPublishedState() {
 int main() {
   TestDecodeTypedLowCmdMessage();
   TestEncodeTypedStatePublications();
+  TestEncodeTypedStateKeepsZeroTick();
+  TestEncodeTypedStateKeepsZeroModeMachine();
   TestDdsFactoryCreatesAssembly();
   TestDdsFactoryUsesConfiguredRuntimeTopicsAndDomain();
   TestCommandIngressStartFailsWithoutReader();

@@ -373,12 +373,12 @@ class BridgeRunner::Impl {
                                              "runner is stopping or stopped");
       return submission;
     }
-    if (!command.valid || command.mode == ControlMode::kUnknown) {
-      CommandSubmissionResult submission;
-      submission.result = make_runner_result(RunnerCallStatus::kRejected,
-                                             "invalid command rejected");
-      return submission;
-    }
+    // if (!command.valid || command.mode == ControlMode::kUnknown) {
+    //   CommandSubmissionResult submission;
+    //   submission.result = make_runner_result(RunnerCallStatus::kRejected,
+    //                                          "invalid command rejected");
+    //   return submission;
+    // }
 
     const bool replaced_previous = status_.command_buffer.has_latest_command;
     status_.command_buffer.has_latest_command = true;

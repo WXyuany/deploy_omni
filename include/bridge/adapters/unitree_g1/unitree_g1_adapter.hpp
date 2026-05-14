@@ -24,6 +24,8 @@ struct SessionConfig {
   std::string imu_topic;
   std::uint64_t initialize_timeout_ns{0};
   std::uint64_t read_timeout_ns{0};
+  std::uint32_t read_retry_attempts{10};
+  std::uint64_t read_retry_interval_ns{1000000000ULL};
   std::uint64_t write_timeout_ns{0};
   bool require_motion_release{true};
   bool verify_low_state_crc{false};

@@ -150,14 +150,14 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
                                   "command width exceeds Unitree motor slot count",
                                   infer_sequence(message), receive_time_ns));
   }
-  if (decode_control_mode(message.mode_machine()) == core::ControlMode::kUnknown) {
-    return make_result(TranslationStatus::kUnsupported,
-                       "unsupported command control mode",
-                       make_fault(core::FaultCategory::kInvalidCommand,
-                                  core::FaultSeverity::kRecoverable,
-                                  "unsupported command control mode",
-                                   infer_sequence(message), receive_time_ns));
-  }
+  // if (decode_control_mode(message.mode_machine()) == core::ControlMode::kUnknown) {
+  //   return make_result(TranslationStatus::kUnsupported,
+  //                      "unsupported command control mode",
+  //                      make_fault(core::FaultCategory::kInvalidCommand,
+  //                                 core::FaultSeverity::kRecoverable,
+  //                                 "unsupported command control mode",
+  //                                  infer_sequence(message), receive_time_ns));
+  // }
   if (!validate_lowcmd_crc(message)) {
     return make_result(TranslationStatus::kRejected,
                        "command message failed crc validation",
@@ -219,8 +219,8 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
   message.version({1U, 0U});
   message.mode_pr(state.mode_pr);
   const std::uint8_t encoded_mode = encode_control_mode(state.active_mode);
-  message.mode_machine(state.mode_machine == 0U ? encoded_mode : state.mode_machine);
-  message.tick(static_cast<std::uint32_t>(state.sequence));
+  message.mode_machine(state.mode_machine);
+  message.tick(state.tick);
 
   auto motors = message.motor_state();
   const std::size_t width = std::min<std::size_t>(state.joints.width(), kUnitreeMotorSlotCount);
@@ -232,6 +232,7 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
     motors[index].tau_est(static_cast<float>(state.joints.effort[index]));
   }
   message.motor_state(motors);
+  message.wireless_remote(state.wireless_remote);
 
   unitree_hg::msg::dds_::IMUState_ imu_state;
   if (state.imu.has_value()) {
@@ -252,6 +253,8 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
     imu_state.accelerometer(accelerometer);
   }
   message.imu_state(imu_state);
+  message.crc(crc32_core(reinterpret_cast<uint32_t*>(&message),
+                         (sizeof(message) >> 2) - 1));
   return message;
 }
 
