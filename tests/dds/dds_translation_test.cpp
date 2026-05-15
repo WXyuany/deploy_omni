@@ -118,6 +118,8 @@ StateFrame MakeHardwareState() {
   state.publish_time_ns = 1010U;
   state.mode_pr = 9U;
   state.mode_machine = 5U;
+  state.low_state_version = {3U, 4U};
+  state.low_state_reserve = {101U, 102U, 103U, 104U};
   state.lifecycle_state = LifecycleState::kActive;
   state.active_mode = ControlMode::kTorque;
   state.mode_label = "torque_mode";
@@ -128,6 +130,13 @@ StateFrame MakeHardwareState() {
   state.joints.velocity = {33.0, 44.0};
   state.joints.effort = {55.0, 66.0};
   state.joints.acceleration = {77.0, 88.0};
+  state.joints.motor_mode = {7U, 8U};
+  state.joints.motor_temperature = {{{31, 41}}, {{32, 42}}};
+  state.joints.motor_voltage = {51.0, 52.0};
+  state.joints.motor_sensor = {{{61U, 71U}}, {{62U, 72U}}};
+  state.joints.motor_state = {81U, 82U};
+  state.joints.motor_reserve = {{{91U, 101U, 111U, 121U}},
+                                {{92U, 102U, 112U, 122U}}};
   state.fault = BridgeFault{
       .category = bridge::core::FaultCategory::kCommandStale,
       .severity = bridge::core::FaultSeverity::kRecoverable,
@@ -145,6 +154,7 @@ StateFrame MakeHardwareState() {
       .rpy_xyz = {0.6, 0.7, 0.8},
       .angular_velocity_xyz = {0.1, 0.2, 0.3},
       .linear_acceleration_xyz = {9.1, 9.2, 9.3},
+      .temperature = 55,
   };
   return state;
 }
@@ -195,10 +205,21 @@ void TestTranslateHardwareStateToLowStateThroughJointMap() {
   assert(translated.state->tick() == 20U);
   assert(translated.state->mode_pr() == 9U);
   assert(translated.state->mode_machine() == 5U);
+  assert(translated.state->version()[0] == 3U);
+  assert(translated.state->version()[1] == 4U);
+  assert(translated.state->reserve()[2] == 103U);
+  assert(translated.state->motor_state()[0].mode() == 8U);
+  assert(translated.state->motor_state()[1].mode() == 7U);
   assert(translated.state->motor_state()[0].q() == 22.0F);
   assert(translated.state->motor_state()[1].q() == 11.0F);
   assert(translated.state->motor_state()[0].tau_est() == 66.0F);
   assert(translated.state->motor_state()[1].tau_est() == 55.0F);
+  assert(translated.state->motor_state()[0].temperature()[0] == 32);
+  assert(translated.state->motor_state()[1].temperature()[1] == 41);
+  assert(translated.state->motor_state()[0].vol() == 52.0F);
+  assert(translated.state->motor_state()[1].sensor()[1] == 71U);
+  assert(translated.state->motor_state()[0].motorstate() == 82U);
+  assert(translated.state->motor_state()[1].reserve()[3] == 121U);
   assert(translated.state->imu_state().quaternion()[0] == 0.5F);
   assert(translated.state->imu_state().quaternion()[1] == 0.2F);
   assert(translated.state->imu_state().quaternion()[2] == 0.3F);
@@ -206,6 +227,7 @@ void TestTranslateHardwareStateToLowStateThroughJointMap() {
   assert(translated.state->imu_state().rpy()[0] == 0.6F);
   assert(translated.state->imu_state().rpy()[1] == 0.7F);
   assert(translated.state->imu_state().rpy()[2] == 0.8F);
+  assert(translated.state->imu_state().temperature() == 55);
 }
 
 void TestRejectsLowCmdWithNonFiniteValues() {
@@ -222,15 +244,16 @@ void TestRejectsLowCmdWithNonFiniteValues() {
   assert(translated.result.fault->category == bridge::core::FaultCategory::kInvalidCommand);
 }
 
-void TestRejectsLowCmdWithInvalidCrc() {
+void TestAcceptsLowCmdWithExternalCrcWithoutValidation() {
   auto message = MakeLowCmd();
-  message.crc(message.crc() + 1U);
+  const std::uint32_t external_crc = message.crc() + 1U;
+  message.crc(external_crc);
 
   const auto translated = translate_lowcmd_to_command(message, 400U);
-  assert(!translated.result.succeeded());
-  assert(!translated.command.has_value());
-  assert(translated.result.fault.has_value());
-  assert(translated.result.fault->category == bridge::core::FaultCategory::kInvalidCommand);
+  assert(translated.result.succeeded());
+  assert(translated.command.has_value());
+  assert(translated.command->low_cmd_crc.has_value());
+  assert(*translated.command->low_cmd_crc == external_crc);
 }
 
 void TestRejectsStateWithInvalidImuVectorWidths() {
@@ -249,6 +272,40 @@ void TestRejectsStateWithInvalidImuVectorWidths() {
       translate_hardware_state_to_lowstate(state, MakeSwappingJointMap());
   assert(!translated.result.succeeded());
   assert(!translated.state.has_value());
+}
+
+void TestRejectsStateWithMismatchedDiagnosticVectorWidths() {
+  auto state = MakeHardwareState();
+  state.joints.motor_voltage = {1.0};
+
+  const auto translated =
+      translate_hardware_state_to_lowstate(state, MakeSwappingJointMap());
+  assert(!translated.result.succeeded());
+  assert(!translated.state.has_value());
+}
+
+void TestDiagnosticOnlyStateDefaultsMissingMotionFieldsToZero() {
+  StateFrame state;
+  state.valid = true;
+  state.joints.motor_mode = {7U, 8U};
+  state.joints.motor_temperature = {{{31, 41}}, {{32, 42}}};
+  state.joints.motor_voltage = {51.0, 52.0};
+  state.joints.motor_sensor = {{{61U, 71U}}, {{62U, 72U}}};
+  state.joints.motor_state = {81U, 82U};
+  state.joints.motor_reserve = {{{91U, 101U, 111U, 121U}},
+                                {{92U, 102U, 112U, 122U}}};
+
+  const auto translated =
+      translate_hardware_state_to_lowstate(state, MakeSwappingJointMap());
+
+  assert(translated.result.succeeded());
+  assert(translated.state.has_value());
+  assert(translated.state->motor_state()[0].mode() == 8U);
+  assert(translated.state->motor_state()[0].q() == 0.0F);
+  assert(translated.state->motor_state()[0].dq() == 0.0F);
+  assert(translated.state->motor_state()[0].ddq() == 0.0F);
+  assert(translated.state->motor_state()[0].tau_est() == 0.0F);
+  assert(translated.state->motor_state()[0].temperature()[1] == 42);
 }
 
 void TestDisabledJointSlotsRemainZeroInDdsTranslations() {
@@ -285,6 +342,13 @@ void TestDisabledJointSlotsRemainZeroInDdsTranslations() {
   state.joints.velocity = {44.0, 999.0};
   state.joints.effort = {77.0, 999.0};
   state.joints.acceleration = {12.0, 999.0};
+  state.joints.motor_mode = {7U, 8U};
+  state.joints.motor_temperature = {{{31, 41}}, {{32, 42}}};
+  state.joints.motor_voltage = {51.0, 52.0};
+  state.joints.motor_sensor = {{{61U, 71U}}, {{62U, 72U}}};
+  state.joints.motor_state = {81U, 82U};
+  state.joints.motor_reserve = {{{91U, 101U, 111U, 121U}},
+                                {{92U, 102U, 112U, 122U}}};
 
   const auto lowstate =
       translate_hardware_state_to_lowstate(state, MakeJointMapWithDisabledHighestSlot());
@@ -294,6 +358,12 @@ void TestDisabledJointSlotsRemainZeroInDdsTranslations() {
   assert(lowstate.state->motor_state()[2].dq() == 0.0F);
   assert(lowstate.state->motor_state()[2].tau_est() == 0.0F);
   assert(lowstate.state->motor_state()[2].ddq() == 0.0F);
+  assert(lowstate.state->motor_state()[2].mode() == 0U);
+  assert(lowstate.state->motor_state()[2].temperature()[0] == 0);
+  assert(lowstate.state->motor_state()[2].vol() == 0.0F);
+  assert(lowstate.state->motor_state()[2].sensor()[0] == 0U);
+  assert(lowstate.state->motor_state()[2].motorstate() == 0U);
+  assert(lowstate.state->motor_state()[2].reserve()[3] == 0U);
 }
 
 }  // namespace
@@ -303,8 +373,10 @@ int main() {
   TestTranslateLowCmdToHardwareCommandThroughJointMap();
   TestTranslateHardwareStateToLowStateThroughJointMap();
   TestRejectsLowCmdWithNonFiniteValues();
-  TestRejectsLowCmdWithInvalidCrc();
+  TestAcceptsLowCmdWithExternalCrcWithoutValidation();
   TestRejectsStateWithInvalidImuVectorWidths();
+  TestRejectsStateWithMismatchedDiagnosticVectorWidths();
+  TestDiagnosticOnlyStateDefaultsMissingMotionFieldsToZero();
   TestDisabledJointSlotsRemainZeroInDdsTranslations();
   return 0;
 }

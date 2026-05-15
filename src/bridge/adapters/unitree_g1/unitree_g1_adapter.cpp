@@ -119,6 +119,8 @@ class UnitreeG1Adapter::Impl {
     state.tick = session_read.state->tick;
     state.sample_time_ns = session_read.state->sample_time_ns;
     state.publish_time_ns = session_read.state->sample_time_ns;
+    state.low_state_version = session_read.state->low_state_version;
+    state.low_state_reserve = session_read.state->low_state_reserve;
     state.mode_pr = session_read.state->mode_pr;
     state.mode_machine = session_read.state->mode_machine;
     state.lifecycle_state = lifecycle_state_;
@@ -132,6 +134,12 @@ class UnitreeG1Adapter::Impl {
     state.joints.velocity = session_read.state->velocity;
     state.joints.effort = session_read.state->effort;
     state.joints.acceleration = session_read.state->acceleration;
+    state.joints.motor_mode = session_read.state->motor_mode;
+    state.joints.motor_temperature = session_read.state->motor_temperature;
+    state.joints.motor_voltage = session_read.state->motor_voltage;
+    state.joints.motor_sensor = session_read.state->motor_sensor;
+    state.joints.motor_state = session_read.state->motor_state;
+    state.joints.motor_reserve = session_read.state->motor_reserve;
     state.wireless_remote = session_read.state->wireless_remote;
     if (session_read.state->imu.has_value()) {
       state.imu = *session_read.state->imu;

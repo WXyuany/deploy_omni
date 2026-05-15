@@ -14,6 +14,15 @@ void apply_crc(unitree_hg::msg::dds_::LowCmd_& command) {
                              (sizeof(command) >> 2) - 1);
 }
 
+void apply_command_crc(unitree_hg::msg::dds_::LowCmd_& low_cmd,
+                       const bridge::core::CommandFrame& command) {
+  if (command.low_cmd_crc.has_value()) {
+    low_cmd.crc(*command.low_cmd_crc);
+    return;
+  }
+  apply_crc(low_cmd);
+}
+
 void zero_motor_cmd(unitree_hg::msg::dds_::MotorCmd_& motor) {
   motor.mode() = 0;
   motor.q() = 0.0F;
@@ -49,7 +58,7 @@ unitree_hg::msg::dds_::LowCmd_ build_low_cmd_from_command(
   const bool has_valid_motor_modes =
       command.joints.motor_mode.empty() || command.joints.motor_mode.size() >= width;
   if (!has_valid_motor_modes) {
-    apply_crc(low_cmd);
+    apply_command_crc(low_cmd, command);
     return low_cmd;
   }
 
@@ -75,7 +84,7 @@ unitree_hg::msg::dds_::LowCmd_ build_low_cmd_from_command(
                      : static_cast<float>(command.joints.damping.at(index));
   }
 
-  apply_crc(low_cmd);
+  apply_command_crc(low_cmd, command);
   return low_cmd;
 }
 

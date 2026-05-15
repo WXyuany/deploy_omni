@@ -118,6 +118,8 @@ StateFrame MakeStateFrame() {
   state.publish_time_ns = 9015U;
   state.mode_pr = 8U;
   state.mode_machine = 5U;
+  state.low_state_version = {3U, 4U};
+  state.low_state_reserve = {101U, 102U, 103U, 104U};
   state.lifecycle_state = LifecycleState::kActive;
   state.active_mode = ControlMode::kHybrid;
   state.mode_label = "hybrid_tracking";
@@ -127,6 +129,13 @@ StateFrame MakeStateFrame() {
   state.joints.velocity = {1.0, -1.5};
   state.joints.effort = {2.5, -3.5};
   state.joints.acceleration = {0.25, -0.5};
+  state.joints.motor_mode = {6U, 7U};
+  state.joints.motor_temperature = {{{31, 41}}, {{32, 42}}};
+  state.joints.motor_voltage = {51.0, 52.0};
+  state.joints.motor_sensor = {{{61U, 71U}}, {{62U, 72U}}};
+  state.joints.motor_state = {81U, 82U};
+  state.joints.motor_reserve = {{{91U, 101U, 111U, 121U}},
+                                {{92U, 102U, 112U, 122U}}};
   state.imu = bridge::core::ImuSample{
       .sample_time_ns = 9005U,
       .valid = true,
@@ -135,6 +144,7 @@ StateFrame MakeStateFrame() {
       .rpy_xyz = {0.11, 0.12, 0.13},
       .angular_velocity_xyz = {0.01, 0.02, 0.03},
       .linear_acceleration_xyz = {0.0, 0.1, 9.81},
+      .temperature = 55,
   };
   return state;
 }
@@ -209,13 +219,22 @@ void TestEncodeTypedStatePublications() {
   assert(state_msg.tick() == 1234U);
   assert(state_msg.mode_pr() == 8U);
   assert(state_msg.mode_machine() == 5U);
+  assert(state_msg.version()[0] == 3U);
+  assert(state_msg.reserve()[2] == 103U);
+  assert(state_msg.motor_state()[0].mode() == 6U);
   assert(state_msg.motor_state()[0].q() == 0.1F);
   assert(state_msg.motor_state()[1].q() == -0.2F);
+  assert(state_msg.motor_state()[1].temperature()[1] == 42);
+  assert(state_msg.motor_state()[1].vol() == 52.0F);
+  assert(state_msg.motor_state()[1].sensor()[0] == 62U);
+  assert(state_msg.motor_state()[1].motorstate() == 82U);
+  assert(state_msg.motor_state()[1].reserve()[3] == 122U);
   assert(state_msg.imu_state().quaternion()[0] == 0.70710677F ||
          state_msg.imu_state().quaternion()[0] == 0.70710678F);
   assert(state_msg.imu_state().rpy()[0] == 0.11F);
   assert(state_msg.imu_state().rpy()[1] == 0.12F);
   assert(state_msg.imu_state().rpy()[2] == 0.13F);
+  assert(state_msg.imu_state().temperature() == 55);
   auto crc_check = state_msg;
   assert(state_msg.crc() == crc32_core(reinterpret_cast<uint32_t*>(&crc_check),
                                        (sizeof(LowState_) >> 2) - 1));

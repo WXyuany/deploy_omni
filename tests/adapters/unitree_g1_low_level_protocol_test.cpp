@@ -27,6 +27,15 @@ CommandFrame MakePackedCommand() {
   return command;
 }
 
+void TestBuildLowCmdUsesExternalCommandCrcWhenPresent() {
+  auto command = MakePackedCommand();
+  command.low_cmd_crc = 0x12345678U;
+
+  const auto low_cmd = build_low_cmd_from_command(command, 29, 9);
+
+  assert(low_cmd.crc() == 0x12345678U);
+}
+
 void TestBuildLowCmdPacksActiveSlotsAndCrc() {
   const auto command = MakePackedCommand();
   const auto low_cmd = build_low_cmd_from_command(command, 29, 9);
@@ -147,6 +156,7 @@ void TestValidateLowStateCrcAcceptsWellFormedState() {
 }
 
 int main() {
+  TestBuildLowCmdUsesExternalCommandCrcWhenPresent();
   TestBuildLowCmdPacksActiveSlotsAndCrc();
   TestBuildSafeLowCmdZerosAllSlots();
   TestBuildLowCmdTreatsMissingOptionalBlocksAsZero();

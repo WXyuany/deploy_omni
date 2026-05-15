@@ -48,6 +48,8 @@ struct LowLevelSessionConfig {
 struct LowLevelSessionState {
   std::uint64_t sample_time_ns{0};
   std::uint32_t tick{0};
+  std::array<std::uint32_t, 2> low_state_version{1U, 0U};
+  std::array<std::uint32_t, 4> low_state_reserve{};
   std::uint8_t mode_pr{0};
   std::uint8_t mode_machine{0};
   bool valid{false};
@@ -57,6 +59,12 @@ struct LowLevelSessionState {
   std::vector<double> velocity;
   std::vector<double> effort;
   std::vector<double> acceleration;
+  std::vector<std::uint8_t> motor_mode;
+  std::vector<std::array<std::int16_t, 2>> motor_temperature;
+  std::vector<double> motor_voltage;
+  std::vector<std::array<std::uint32_t, 2>> motor_sensor;
+  std::vector<std::uint32_t> motor_state;
+  std::vector<std::array<std::uint32_t, 4>> motor_reserve;
   std::array<std::uint8_t, 40> wireless_remote{};
   std::optional<bridge::core::ImuSample> imu;
   std::optional<bridge::core::BridgeFault> fault;

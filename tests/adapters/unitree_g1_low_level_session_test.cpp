@@ -112,19 +112,34 @@ CommandFrame MakeCommand() {
 }
 
 void FillLowState(LowState_& state) {
+  state.version() = {3U, 4U};
   state.mode_pr() = 7;
   state.mode_machine() = 19;
   state.tick() = 1234;
+  state.reserve() = {101U, 102U, 103U, 104U};
   for (std::size_t i = 0; i < 29; ++i) {
-    state.motor_state().at(i).q(static_cast<float>(i) + 0.5F);
-    state.motor_state().at(i).dq(static_cast<float>(i) + 1.5F);
-    state.motor_state().at(i).tau_est(static_cast<float>(i) + 2.5F);
-    state.motor_state().at(i).ddq(static_cast<float>(i) + 3.5F);
+    auto& motor = state.motor_state().at(i);
+    motor.mode(static_cast<std::uint8_t>(i % 3));
+    motor.q(static_cast<float>(i) + 0.5F);
+    motor.dq(static_cast<float>(i) + 1.5F);
+    motor.tau_est(static_cast<float>(i) + 2.5F);
+    motor.ddq(static_cast<float>(i) + 3.5F);
+    motor.temperature() = {static_cast<std::int16_t>(30 + i),
+                           static_cast<std::int16_t>(40 + i)};
+    motor.vol(static_cast<float>(50 + i));
+    motor.sensor() = {static_cast<std::uint32_t>(60 + i),
+                      static_cast<std::uint32_t>(70 + i)};
+    motor.motorstate(static_cast<std::uint32_t>(80 + i));
+    motor.reserve() = {static_cast<std::uint32_t>(90 + i),
+                       static_cast<std::uint32_t>(100 + i),
+                       static_cast<std::uint32_t>(110 + i),
+                       static_cast<std::uint32_t>(120 + i)};
   }
   state.imu_state().quaternion() = {1.0F, 0.0F, 0.0F, 0.0F};
   state.imu_state().gyroscope() = {0.1F, 0.2F, 0.3F};
   state.imu_state().accelerometer() = {1.1F, 1.2F, 1.3F};
   state.imu_state().rpy() = {0.4F, 0.5F, 0.6F};
+  state.imu_state().temperature(55);
   for (std::size_t i = 0; i < state.wireless_remote().size(); ++i) {
     state.wireless_remote().at(i) = static_cast<uint8_t>(i + 1);
   }
@@ -144,15 +159,27 @@ void TestReadStateUsesInjectedLowStateCache() {
   assert(read.state->mode_pr == 7);
   assert(read.state->mode_machine == 19);
   assert(read.state->tick == 1234U);
+  assert(read.state->low_state_version[0] == 3U);
+  assert(read.state->low_state_version[1] == 4U);
+  assert(read.state->low_state_reserve[2] == 103U);
   assert(read.state->position.size() == 29U);
   AssertClose(read.state->position.at(0), 0.5);
   AssertClose(read.state->velocity.at(1), 2.5);
   AssertClose(read.state->effort.at(2), 4.5);
   AssertClose(read.state->acceleration.at(3), 6.5);
+  assert(read.state->motor_mode.at(2) == 2U);
+  assert(read.state->motor_temperature.at(3)[0] == 33);
+  assert(read.state->motor_temperature.at(3)[1] == 43);
+  AssertClose(read.state->motor_voltage.at(4), 54.0);
+  assert(read.state->motor_sensor.at(5)[0] == 65U);
+  assert(read.state->motor_sensor.at(5)[1] == 75U);
+  assert(read.state->motor_state.at(6) == 86U);
+  assert(read.state->motor_reserve.at(7)[3] == 127U);
   assert(read.state->imu.has_value());
-  AssertClose(read.state->imu->orientation_xyzw.at(0), 1.0);
+  AssertClose(read.state->imu->orientation_xyzw.at(3), 1.0);
   AssertClose(read.state->imu->angular_velocity_xyz.at(1), 0.2);
   AssertClose(read.state->imu->linear_acceleration_xyz.at(2), 1.3);
+  assert(read.state->imu->temperature == 55);
   assert(read.state->wireless_remote.size() == state.wireless_remote().size());
   assert(read.state->wireless_remote.at(0) == 1U);
   assert(read.state->wireless_remote.at(39) == 40U);
@@ -200,15 +227,17 @@ void TestExplicitImuTopicOverridesEmbeddedImu() {
   imu.gyroscope() = {9.1F, 9.2F, 9.3F};
   imu.accelerometer() = {8.1F, 8.2F, 8.3F};
   imu.rpy() = {7.1F, 7.2F, 7.3F};
+  imu.temperature(66);
   session.handle_imu_message(imu);
 
   const auto read = session.read_state();
   assert(read.result.status == AdapterCallStatus::kOk);
   assert(read.state.has_value());
   assert(read.state->imu.has_value());
-  AssertClose(read.state->imu->orientation_xyzw.at(1), 1.0);
+  AssertClose(read.state->imu->orientation_xyzw.at(0), 1.0);
   AssertClose(read.state->imu->angular_velocity_xyz.at(0), 9.1);
   AssertClose(read.state->imu->linear_acceleration_xyz.at(2), 8.3);
+  assert(read.state->imu->temperature == 66);
 }
 
 void TestWriteCommandPacksLowCmdUsingCommandModeMachineAndMotorModes() {

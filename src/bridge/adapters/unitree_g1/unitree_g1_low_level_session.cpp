@@ -68,11 +68,62 @@ constexpr int kMaxMotionReleaseAttempts = 3;
       .sample_time_ns = sample_time_ns,
       .valid = true,
       .stale = false,
-      .orientation_xyzw = to_vector(imu.quaternion()),
+      .orientation_xyzw = {static_cast<double>(imu.quaternion()[1]),
+                           static_cast<double>(imu.quaternion()[2]),
+                           static_cast<double>(imu.quaternion()[3]),
+                           static_cast<double>(imu.quaternion()[0])},
       .rpy_xyz = to_vector(imu.rpy()),
       .angular_velocity_xyz = to_vector(imu.gyroscope()),
       .linear_acceleration_xyz = to_vector(imu.accelerometer()),
+      .temperature = imu.temperature(),
   };
+}
+
+[[nodiscard]] LowLevelSessionState make_session_state_from_low_state(
+    const ::unitree_hg::msg::dds_::LowState_& low_state,
+    const std::optional<::unitree_hg::msg::dds_::IMUState_>& latest_imu_state,
+    const std::size_t hardware_slot_count,
+    const std::uint64_t sample_time_ns) {
+  LowLevelSessionState state;
+  state.sample_time_ns = sample_time_ns;
+  state.low_state_version = low_state.version();
+  state.low_state_reserve = low_state.reserve();
+  state.tick = low_state.tick();
+  state.mode_pr = low_state.mode_pr();
+  state.mode_machine = low_state.mode_machine();
+  state.valid = true;
+  state.position.resize(hardware_slot_count, 0.0);
+  state.velocity.resize(hardware_slot_count, 0.0);
+  state.effort.resize(hardware_slot_count, 0.0);
+  state.acceleration.resize(hardware_slot_count, 0.0);
+  state.motor_mode.resize(hardware_slot_count, 0U);
+  state.motor_temperature.resize(hardware_slot_count, {0, 0});
+  state.motor_voltage.resize(hardware_slot_count, 0.0);
+  state.motor_sensor.resize(hardware_slot_count, {0U, 0U});
+  state.motor_state.resize(hardware_slot_count, 0U);
+  state.motor_reserve.resize(hardware_slot_count, {0U, 0U, 0U, 0U});
+  state.wireless_remote = low_state.wireless_remote();
+
+  const std::size_t width =
+      std::min<std::size_t>(hardware_slot_count, low_state.motor_state().size());
+  for (std::size_t index = 0; index < width; ++index) {
+    const auto& motor = low_state.motor_state().at(index);
+    state.position[index] = motor.q();
+    state.velocity[index] = motor.dq();
+    state.effort[index] = motor.tau_est();
+    state.acceleration[index] = motor.ddq();
+    state.motor_mode[index] = motor.mode();
+    state.motor_temperature[index] = motor.temperature();
+    state.motor_voltage[index] = motor.vol();
+    state.motor_sensor[index] = motor.sensor();
+    state.motor_state[index] = motor.motorstate();
+    state.motor_reserve[index] = motor.reserve();
+  }
+
+  state.imu = latest_imu_state.has_value()
+                  ? to_imu_sample(*latest_imu_state, sample_time_ns)
+                  : to_imu_sample(low_state.imu_state(), sample_time_ns);
+  return state;
 }
 
 void print_command_info(const bridge::core::CommandFrame& command,
@@ -311,33 +362,9 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
       return result;
     }
 
-    LowLevelSessionState fallback;
-    fallback.sample_time_ns = synthetic_time_ns_;
-    fallback.tick = latest_low_state_->tick();
-    fallback.mode_pr = latest_low_state_->mode_pr();
-    fallback.mode_machine = latest_low_state_->mode_machine();
-    fallback.valid = true;
-    fallback.position.resize(config_.hardware_slot_count, 0.0);
-    fallback.velocity.resize(config_.hardware_slot_count, 0.0);
-    fallback.effort.resize(config_.hardware_slot_count, 0.0);
-    fallback.acceleration.resize(config_.hardware_slot_count, 0.0);
-    fallback.wireless_remote = latest_low_state_->wireless_remote();
-
-    const std::size_t width = std::min<std::size_t>(
-        config_.hardware_slot_count, latest_low_state_->motor_state().size());
-    for (std::size_t index = 0; index < width; ++index) {
-      const auto& motor = latest_low_state_->motor_state().at(index);
-      fallback.position[index] = motor.q();
-      fallback.velocity[index] = motor.dq();
-      fallback.effort[index] = motor.tau_est();
-      fallback.acceleration[index] = motor.ddq();
-    }
-
-    if (latest_imu_state_.has_value()) {
-      fallback.imu = to_imu_sample(*latest_imu_state_, synthetic_time_ns_);
-    } else {
-      fallback.imu = to_imu_sample(latest_low_state_->imu_state(), synthetic_time_ns_);
-    }
+    LowLevelSessionState fallback = make_session_state_from_low_state(
+        *latest_low_state_, latest_imu_state_, config_.hardware_slot_count,
+        synthetic_time_ns_);
 
     if (config_.stale_state_after_ns > 0 &&
         synthetic_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&
@@ -519,33 +546,9 @@ void UnitreeG1LowLevelSession::reader_loop() {
       continue;
     }
 
-    LowLevelSessionState state;
-    state.sample_time_ns = synthetic_time_ns_;
-    state.tick = latest_low_state_->tick();
-    state.mode_pr = latest_low_state_->mode_pr();
-    state.mode_machine = latest_low_state_->mode_machine();
-    state.valid = true;
-    state.position.resize(config_.hardware_slot_count, 0.0);
-    state.velocity.resize(config_.hardware_slot_count, 0.0);
-    state.effort.resize(config_.hardware_slot_count, 0.0);
-    state.acceleration.resize(config_.hardware_slot_count, 0.0);
-    state.wireless_remote = latest_low_state_->wireless_remote();
-
-    const std::size_t width = std::min<std::size_t>(
-        config_.hardware_slot_count, latest_low_state_->motor_state().size());
-    for (std::size_t index = 0; index < width; ++index) {
-      const auto& motor = latest_low_state_->motor_state().at(index);
-      state.position[index] = motor.q();
-      state.velocity[index] = motor.dq();
-      state.effort[index] = motor.tau_est();
-      state.acceleration[index] = motor.ddq();
-    }
-
-    if (latest_imu_state_.has_value()) {
-      state.imu = to_imu_sample(*latest_imu_state_, synthetic_time_ns_);
-    } else {
-      state.imu = to_imu_sample(latest_low_state_->imu_state(), synthetic_time_ns_);
-    }
+    LowLevelSessionState state = make_session_state_from_low_state(
+        *latest_low_state_, latest_imu_state_, config_.hardware_slot_count,
+        synthetic_time_ns_);
 
     if (config_.stale_state_after_ns > 0 &&
         synthetic_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&

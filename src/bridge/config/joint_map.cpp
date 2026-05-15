@@ -351,6 +351,23 @@ void report_width_mismatch(std::vector<JointMapIssue>* issues,
   return false;
 }
 
+template <typename T>
+[[nodiscard]] bool block_field_width_ok(std::vector<JointMapIssue>* issues,
+                                        const std::vector<T>& values,
+                                        const std::size_t expected_width,
+                                        const std::string& vector_name) {
+  if (values.empty()) {
+    return true;
+  }
+
+  if (values.size() == expected_width) {
+    return true;
+  }
+
+  report_width_mismatch(issues, vector_name, values.size(), expected_width);
+  return false;
+}
+
 VectorProjectionResult project_vector_impl(const std::vector<JointMapEntry>& entries,
                                            const std::vector<double>& values,
                                            const ProjectionDirection direction,
@@ -418,6 +435,27 @@ VectorProjectionResult project_vector_impl(const std::vector<JointMapEntry>& ent
       continue;
     }
     projected[entry.hardware_index] = values[entry.sim_index];
+  }
+
+  return projected;
+}
+
+template <typename T>
+[[nodiscard]] std::vector<T> project_values_by_index(
+    const std::vector<JointMapEntry>& entries, const std::vector<T>& values,
+    const ProjectionDirection direction, const T& default_value) {
+  const bool from_sim = direction == ProjectionDirection::kSimToHardware;
+  const std::size_t output_width = projection_width(entries, !from_sim);
+  std::vector<T> projected(output_width, default_value);
+
+  for (const JointMapEntry& entry : entries) {
+    if (!entry.enabled) {
+      continue;
+    }
+    const std::size_t source_index = from_sim ? entry.sim_index : entry.hardware_index;
+    const std::size_t destination_index =
+        from_sim ? entry.hardware_index : entry.sim_index;
+    projected[destination_index] = values[source_index];
   }
 
   return projected;
@@ -696,6 +734,23 @@ StateProjectionResult JointMap::project_state_hardware_to_sim(
   width_ok &= block_field_width_ok(&result.issues,
                                    hardware_state.joints.acceleration,
                                    hardware_width, "state.acceleration");
+  width_ok &= block_field_width_ok(&result.issues, hardware_state.joints.motor_mode,
+                                   hardware_width, "state.motor_mode");
+  width_ok &= block_field_width_ok(&result.issues,
+                                   hardware_state.joints.motor_temperature,
+                                   hardware_width, "state.motor_temperature");
+  width_ok &= block_field_width_ok(&result.issues,
+                                   hardware_state.joints.motor_voltage,
+                                   hardware_width, "state.motor_voltage");
+  width_ok &= block_field_width_ok(&result.issues,
+                                   hardware_state.joints.motor_sensor,
+                                   hardware_width, "state.motor_sensor");
+  width_ok &= block_field_width_ok(&result.issues,
+                                   hardware_state.joints.motor_state,
+                                   hardware_width, "state.motor_state");
+  width_ok &= block_field_width_ok(&result.issues,
+                                   hardware_state.joints.motor_reserve,
+                                   hardware_width, "state.motor_reserve");
   if (!width_ok) {
     return result;
   }
@@ -747,6 +802,57 @@ StateProjectionResult JointMap::project_state_hardware_to_sim(
                          projected.issues.end());
   } else {
     sim_state.joints.acceleration.clear();
+  }
+
+  if (!hardware_state.joints.motor_mode.empty()) {
+    sim_state.joints.motor_mode = project_values_by_index<std::uint8_t>(
+        entries_, hardware_state.joints.motor_mode,
+        ProjectionDirection::kHardwareToSim, 0U);
+  } else {
+    sim_state.joints.motor_mode.clear();
+  }
+
+  if (!hardware_state.joints.motor_temperature.empty()) {
+    sim_state.joints.motor_temperature =
+        project_values_by_index<std::array<std::int16_t, 2>>(
+            entries_, hardware_state.joints.motor_temperature,
+            ProjectionDirection::kHardwareToSim, {0, 0});
+  } else {
+    sim_state.joints.motor_temperature.clear();
+  }
+
+  if (!hardware_state.joints.motor_voltage.empty()) {
+    sim_state.joints.motor_voltage = project_values_by_index<double>(
+        entries_, hardware_state.joints.motor_voltage,
+        ProjectionDirection::kHardwareToSim, 0.0);
+  } else {
+    sim_state.joints.motor_voltage.clear();
+  }
+
+  if (!hardware_state.joints.motor_sensor.empty()) {
+    sim_state.joints.motor_sensor =
+        project_values_by_index<std::array<std::uint32_t, 2>>(
+            entries_, hardware_state.joints.motor_sensor,
+            ProjectionDirection::kHardwareToSim, {0U, 0U});
+  } else {
+    sim_state.joints.motor_sensor.clear();
+  }
+
+  if (!hardware_state.joints.motor_state.empty()) {
+    sim_state.joints.motor_state = project_values_by_index<std::uint32_t>(
+        entries_, hardware_state.joints.motor_state,
+        ProjectionDirection::kHardwareToSim, 0U);
+  } else {
+    sim_state.joints.motor_state.clear();
+  }
+
+  if (!hardware_state.joints.motor_reserve.empty()) {
+    sim_state.joints.motor_reserve =
+        project_values_by_index<std::array<std::uint32_t, 4>>(
+            entries_, hardware_state.joints.motor_reserve,
+            ProjectionDirection::kHardwareToSim, {0U, 0U, 0U, 0U});
+  } else {
+    sim_state.joints.motor_reserve.clear();
   }
 
   result.state = std::move(sim_state);

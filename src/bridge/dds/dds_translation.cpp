@@ -132,12 +132,6 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
   return true;
 }
 
-[[nodiscard]] bool validate_lowcmd_crc(const unitree_hg::msg::dds_::LowCmd_& message) {
-  auto copy = message;
-  return copy.crc() == crc32_core(reinterpret_cast<uint32_t*>(&copy),
-                                  (sizeof(copy) >> 2) - 1);
-}
-
 [[nodiscard]] TranslationResult validate_lowcmd(
     const unitree_hg::msg::dds_::LowCmd_& message,
     const std::uint64_t receive_time_ns,
@@ -158,14 +152,6 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
   //                                 "unsupported command control mode",
   //                                  infer_sequence(message), receive_time_ns));
   // }
-  if (!validate_lowcmd_crc(message)) {
-    return make_result(TranslationStatus::kRejected,
-                       "command message failed crc validation",
-                       make_fault(core::FaultCategory::kInvalidCommand,
-                                  core::FaultSeverity::kRecoverable,
-                                  "command message failed crc validation",
-                                  infer_sequence(message), receive_time_ns));
-  }
   if (!validate_motor_commands_finite(message.motor_cmd(), width)) {
     return make_result(TranslationStatus::kRejected,
                        "command message contains non-finite motor values",
@@ -179,18 +165,25 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
 
 [[nodiscard]] TranslationResult validate_state(const core::StateFrame& state) {
   const std::size_t width = state.joints.width();
-  const auto same_width = [width](const std::vector<double>& values) {
+  const auto same_width = [width](const auto& values) {
     return values.empty() || values.size() == width;
   };
   if (!same_width(state.joints.position) || !same_width(state.joints.velocity) ||
-      !same_width(state.joints.effort) || !same_width(state.joints.acceleration)) {
+      !same_width(state.joints.effort) || !same_width(state.joints.acceleration) ||
+      !same_width(state.joints.motor_mode) ||
+      !same_width(state.joints.motor_temperature) ||
+      !same_width(state.joints.motor_voltage) ||
+      !same_width(state.joints.motor_sensor) ||
+      !same_width(state.joints.motor_state) ||
+      !same_width(state.joints.motor_reserve)) {
     return make_result(TranslationStatus::kRejected,
-                       "state joint vectors must share the same width");
+                        "state joint vectors must share the same width");
   }
   if (!has_only_finite_values(state.joints.position) ||
       !has_only_finite_values(state.joints.velocity) ||
       !has_only_finite_values(state.joints.effort) ||
-      !has_only_finite_values(state.joints.acceleration)) {
+      !has_only_finite_values(state.joints.acceleration) ||
+      !has_only_finite_values(state.joints.motor_voltage)) {
     return make_result(TranslationStatus::kRejected,
                        "state joint vectors must contain only finite values");
   }
@@ -216,20 +209,46 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
 [[nodiscard]] unitree_hg::msg::dds_::LowState_ make_low_state_message(
     const core::StateFrame& state) {
   unitree_hg::msg::dds_::LowState_ message;
-  message.version({1U, 0U});
+  message.version(state.low_state_version);
   message.mode_pr(state.mode_pr);
   const std::uint8_t encoded_mode = encode_control_mode(state.active_mode);
   message.mode_machine(state.mode_machine);
   message.tick(state.tick);
+  message.reserve(state.low_state_reserve);
 
   auto motors = message.motor_state();
   const std::size_t width = std::min<std::size_t>(state.joints.width(), kUnitreeMotorSlotCount);
   for (std::size_t index = 0; index < width; ++index) {
-    motors[index].mode(encode_control_mode(state.active_mode));
-    motors[index].q(static_cast<float>(state.joints.position[index]));
-    motors[index].dq(static_cast<float>(state.joints.velocity[index]));
-    motors[index].ddq(static_cast<float>(state.joints.acceleration[index]));
-    motors[index].tau_est(static_cast<float>(state.joints.effort[index]));
+    motors[index].mode(state.joints.motor_mode.empty()
+                           ? encoded_mode
+                           : state.joints.motor_mode[index]);
+    motors[index].q(state.joints.position.empty()
+                        ? 0.0F
+                        : static_cast<float>(state.joints.position[index]));
+    motors[index].dq(state.joints.velocity.empty()
+                         ? 0.0F
+                         : static_cast<float>(state.joints.velocity[index]));
+    motors[index].ddq(state.joints.acceleration.empty()
+                          ? 0.0F
+                          : static_cast<float>(state.joints.acceleration[index]));
+    motors[index].tau_est(state.joints.effort.empty()
+                              ? 0.0F
+                              : static_cast<float>(state.joints.effort[index]));
+    if (!state.joints.motor_temperature.empty()) {
+      motors[index].temperature(state.joints.motor_temperature[index]);
+    }
+    if (!state.joints.motor_voltage.empty()) {
+      motors[index].vol(static_cast<float>(state.joints.motor_voltage[index]));
+    }
+    if (!state.joints.motor_sensor.empty()) {
+      motors[index].sensor(state.joints.motor_sensor[index]);
+    }
+    if (!state.joints.motor_state.empty()) {
+      motors[index].motorstate(state.joints.motor_state[index]);
+    }
+    if (!state.joints.motor_reserve.empty()) {
+      motors[index].reserve(state.joints.motor_reserve[index]);
+    }
   }
   message.motor_state(motors);
   message.wireless_remote(state.wireless_remote);
@@ -251,6 +270,7 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
     imu_state.rpy(rpy);
     imu_state.gyroscope(gyroscope);
     imu_state.accelerometer(accelerometer);
+    imu_state.temperature(state.imu->temperature);
   }
   message.imu_state(imu_state);
   message.crc(crc32_core(reinterpret_cast<uint32_t*>(&message),
@@ -275,6 +295,7 @@ CommandTranslation translate_lowcmd_to_command(
   command.receive_time_ns = receive_time_ns;
   command.mode_pr = message.mode_pr();
   command.mode_machine = message.mode_machine();
+  command.low_cmd_crc = message.crc();
   command.mode = decode_control_mode(message.mode_machine());
   command.mode_label = "unitree_lowcmd";
   command.valid = true;
@@ -314,6 +335,7 @@ CommandTranslation translate_lowcmd_to_hardware_command(
   command.receive_time_ns = receive_time_ns;
   command.mode_pr = message.mode_pr();
   command.mode_machine = message.mode_machine();
+  command.low_cmd_crc = message.crc();
   command.mode = decode_control_mode(message.mode_machine());
   command.mode_label = "unitree_lowcmd";
   command.valid = true;
