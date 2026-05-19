@@ -94,12 +94,20 @@ struct DebugPrintConfig {
   }
 };
 
+struct GamepadConfig {
+  bool enabled{false};
+  std::string backend{"sdl"};
+  int controller_index{0};
+  std::string mapping_path;
+};
+
 struct BridgeStartupConfig {
   std::string source_path;
   std::string robot_type;
   core::BridgeRunnerConfig runner;
   DdsConfig dds;
   DebugPrintConfig debug_print;
+  GamepadConfig gamepad;
   RobotAdapterConfig adapter;
   JointMapValidationOptions joint_map_validation;
   std::vector<JointMapEntry> joint_map_entries;

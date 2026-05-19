@@ -21,6 +21,7 @@ struct RobotAssembly {
   std::unique_ptr<core::BridgeCommandIngress> command_ingress;
   std::unique_ptr<core::BridgeStateEgress> state_egress;
   std::unique_ptr<extensions::ObservationHook> observation_hook;
+  std::unique_ptr<core::BridgeGamepadRemoteSource> gamepad_remote;
 
   [[nodiscard]] core::BridgeRunnerDependencies runner_dependencies() const noexcept {
     return {
@@ -28,6 +29,7 @@ struct RobotAssembly {
         .command_ingress = command_ingress.get(),
         .state_egress = state_egress.get(),
         .observation_hook = observation_hook.get(),
+        .gamepad_remote = gamepad_remote.get(),
     };
   }
 };

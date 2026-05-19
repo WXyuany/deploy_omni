@@ -2,6 +2,7 @@
 #include "bridge/build_config.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +20,9 @@
 #endif
 #include "../../../include/bridge/dds/dds_factory.hpp"
 #include "../../../include/bridge/extensions/hooks.hpp"
+#if BRIDGE_BUILD_GAMEPAD_SDL
+#include "../../../include/bridge/gamepad/sdl_gamepad.hpp"
+#endif
 
 namespace bridge::app {
 namespace {
@@ -34,6 +38,51 @@ create_observation_hook(const config::BridgeStartupConfig& startup_config) {
       .rate_hz = startup_config.debug_print.rate_hz,
       .joint_names = startup_config.adapter.joint_names,
   });
+}
+
+#if BRIDGE_BUILD_GAMEPAD_SDL
+class SdlBridgeGamepadRemoteSource final : public core::BridgeGamepadRemoteSource {
+ public:
+  explicit SdlBridgeGamepadRemoteSource(gamepad::SdlGamepadRemoteOptions options)
+      : remote_(options) {}
+
+  core::RunnerCallResult start() override {
+    const gamepad::SdlGamepadStartResult result = remote_.start();
+    return {.status = result.connected ? core::RunnerCallStatus::kOk
+                                       : core::RunnerCallStatus::kDegraded,
+            .detail = result.connected ? "gamepad remote connected"
+                                       : "gamepad remote not connected",
+            .fault = std::nullopt};
+  }
+
+  std::optional<gamepad::CommonGamepad> read() override { return remote_.read(); }
+
+  core::RunnerCallResult stop() override {
+    remote_.stop();
+    return {.status = core::RunnerCallStatus::kOk,
+            .detail = "gamepad remote stopped",
+            .fault = std::nullopt};
+  }
+
+ private:
+  gamepad::SdlGamepadRemote remote_;
+};
+#endif
+
+[[nodiscard]] std::unique_ptr<core::BridgeGamepadRemoteSource>
+create_gamepad_remote(const config::BridgeStartupConfig& startup_config) {
+  if (!startup_config.gamepad.enabled) {
+    return nullptr;
+  }
+#if BRIDGE_BUILD_GAMEPAD_SDL
+  return std::make_unique<SdlBridgeGamepadRemoteSource>(
+      gamepad::SdlGamepadRemoteOptions{
+          .controller_index = startup_config.gamepad.controller_index,
+          .mapping_path = startup_config.gamepad.mapping_path});
+#else
+  (void)startup_config;
+  return nullptr;
+#endif
 }
 
 [[nodiscard]] std::size_t configured_hardware_width(
@@ -231,6 +280,7 @@ struct Pm01AdapterConfigBuildResult {
       .command_ingress = nullptr,
       .state_egress = nullptr,
       .observation_hook = create_observation_hook(startup_config),
+      .gamepad_remote = create_gamepad_remote(startup_config),
   };
 
   dds::DdsAssembly dds_assembly =
@@ -267,6 +317,7 @@ struct Pm01AdapterConfigBuildResult {
       .command_ingress = nullptr,
       .state_egress = nullptr,
       .observation_hook = create_observation_hook(startup_config),
+      .gamepad_remote = create_gamepad_remote(startup_config),
   };
 
   dds::DdsAssembly dds_assembly =
@@ -313,6 +364,7 @@ struct Pm01AdapterConfigBuildResult {
       .command_ingress = nullptr,
       .state_egress = nullptr,
       .observation_hook = create_observation_hook(startup_config),
+      .gamepad_remote = create_gamepad_remote(startup_config),
   };
 
   dds::DdsAssembly dds_assembly =
@@ -353,6 +405,15 @@ struct RobotFactoryEntry {
 
 RobotAssemblyCreateResult create_robot_assembly(
     const config::BridgeStartupConfig& startup_config) {
+#if !BRIDGE_BUILD_GAMEPAD_SDL
+  if (startup_config.gamepad.enabled && startup_config.gamepad.backend == "sdl") {
+    return {
+        .status = RobotAssemblyCreateStatus::kInvalidConfig,
+        .detail = "gamepad backend sdl requested but SDL2 support is not built",
+        .assembly = std::nullopt,
+    };
+  }
+#endif
   for (const RobotFactoryEntry& entry : factory_entries()) {
     if (entry.robot_type == startup_config.robot_type) {
       return entry.create(startup_config);

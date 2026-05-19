@@ -1,16 +1,32 @@
 #include "../../../include/bridge/core/bridge_runner.hpp"
 
 #include <cstdio>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "../../../include/bridge/extensions/hooks.hpp"
+#include "../../../include/bridge/gamepad/common_gamepad.hpp"
 
 namespace bridge::core {
 namespace {
+
+struct CachedGamepadSample {
+  gamepad::CommonGamepad gamepad;
+  std::uint64_t receive_time_ns{0};
+};
+
+[[nodiscard]] std::uint64_t now_ns() noexcept {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
 [[nodiscard]] RunnerCallStatus map_adapter_status(
     const AdapterCallStatus status) noexcept {
@@ -78,6 +94,8 @@ class BridgeRunner::Impl {
  public:
   Impl(BridgeRunnerConfig config, BridgeRunnerDependencies dependencies)
       : config_(std::move(config)), dependencies_(dependencies) {}
+
+  ~Impl() { stop_gamepad_remote(); }
 
   [[nodiscard]] const BridgeRunnerConfig& config() const noexcept {
     return config_;
@@ -172,6 +190,21 @@ class BridgeRunner::Impl {
           ingress_start, FaultCategory::kTransport,
           "command ingress start failed",
           config_.fault_policy.fail_stop_on_transport_fault);
+    }
+
+    if (dependencies_.gamepad_remote != nullptr) {
+      RunnerCallResult gamepad_start = dependencies_.gamepad_remote->start();
+      if (gamepad_start.status != RunnerCallStatus::kOk) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        status_.degraded = true;
+      }
+      if (gamepad_start.succeeded()) {
+        gamepad_remote_started_ = true;
+        start_gamepad_thread();
+      } else {
+        std::lock_guard<std::mutex> lock(mutex_);
+        update_degraded_from_runner_locked(gamepad_start);
+      }
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -298,9 +331,12 @@ class BridgeRunner::Impl {
       write_safe_command = cached_safe_command_supported_;
     }
 
+    stop_gamepad_remote();
+
     if (dependencies_.command_ingress != nullptr) {
       ingress_stop_result = dependencies_.command_ingress->stop();
     }
+    stop_gamepad_remote();
     if (write_safe_command && dependencies_.adapter != nullptr) {
       safe_write_result = dependencies_.adapter->write_safe_command();
     }
@@ -546,6 +582,7 @@ class BridgeRunner::Impl {
         state.fault = status_.latched_fault;
       }
       state.publish_time_ns = status_.last_cycle_time_ns;
+      apply_gamepad_remote_locked(&state);
       context = {.cycle_index = status_.cycle_count, .time_ns = status_.last_cycle_time_ns};
     }
 
@@ -563,6 +600,58 @@ class BridgeRunner::Impl {
     return handle_runner_failure_locked(
         publish_result, FaultCategory::kTransport, "state publish failed",
         config_.fault_policy.fail_stop_on_transport_fault);
+  }
+
+  void start_gamepad_thread() {
+    gamepad_stop_requested_.store(false);
+    gamepad_thread_ = std::thread([this] { read_gamepad_loop(); });
+  }
+
+  void stop_gamepad_remote() noexcept {
+    gamepad_stop_requested_.store(true);
+    if (gamepad_thread_.joinable()) {
+      gamepad_thread_.join();
+    }
+    if (dependencies_.gamepad_remote != nullptr && gamepad_remote_started_) {
+      [[maybe_unused]] const RunnerCallResult ignored =
+          dependencies_.gamepad_remote->stop();
+      gamepad_remote_started_ = false;
+    }
+  }
+
+  void read_gamepad_loop() {
+    const std::uint64_t poll_interval_ns =
+        config_.gamepad_poll_interval_ns == 0 ? 1'000'000ULL
+                                              : config_.gamepad_poll_interval_ns;
+    const auto poll_interval = std::chrono::nanoseconds(poll_interval_ns);
+    while (!gamepad_stop_requested_.load()) {
+      if (dependencies_.gamepad_remote != nullptr) {
+        std::optional<gamepad::CommonGamepad> sample =
+            dependencies_.gamepad_remote->read();
+        if (sample.has_value()) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          latest_gamepad_sample_ = CachedGamepadSample{.gamepad = *sample,
+                                                       .receive_time_ns = now_ns()};
+        }
+      }
+      std::this_thread::sleep_for(poll_interval);
+    }
+  }
+
+  void apply_gamepad_remote_locked(StateFrame* state) const {
+    if (!latest_gamepad_sample_.has_value()) {
+      return;
+    }
+    if (config_.gamepad_stale_timeout_ns != 0) {
+      const std::uint64_t current_time_ns = now_ns();
+      const std::uint64_t receive_time_ns = latest_gamepad_sample_->receive_time_ns;
+      if (current_time_ns >= receive_time_ns &&
+          current_time_ns - receive_time_ns > config_.gamepad_stale_timeout_ns) {
+        return;
+      }
+    }
+    state->wireless_remote =
+        gamepad::compress_to_wireless_remote(latest_gamepad_sample_->gamepad);
   }
 
   [[nodiscard]] RunnerCallResult evaluate_health() {
@@ -807,9 +896,13 @@ class BridgeRunner::Impl {
   mutable std::mutex mutex_;
   BridgeRunnerStatus status_;
   std::optional<CommandFrame> latest_command_;
+  std::optional<CachedGamepadSample> latest_gamepad_sample_;
   std::uint64_t fault_sequence_{0};
   bool cached_safe_command_supported_{false};
   bool fault_safe_command_written_{false};
+  bool gamepad_remote_started_{false};
+  std::atomic_bool gamepad_stop_requested_{false};
+  std::thread gamepad_thread_;
 };
 
 BridgeRunner::BridgeRunner(BridgeRunnerConfig config,

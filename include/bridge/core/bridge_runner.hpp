@@ -10,6 +10,7 @@ namespace bridge::extensions {
 class ObservationHook;
 }
 
+#include "../gamepad/common_gamepad.hpp"
 #include "robot_sdk_adapter.hpp"
 #include "types.hpp"
 
@@ -52,6 +53,8 @@ struct BridgeRunnerFaultPolicy {
 struct BridgeRunnerConfig {
   std::uint64_t loop_period_ns{0};
   std::uint64_t command_stale_timeout_ns{0};
+  std::uint64_t gamepad_poll_interval_ns{0};
+  std::uint64_t gamepad_stale_timeout_ns{0};
   StartupIdlePolicy startup_idle_policy{StartupIdlePolicy::kPreferSafeCommand};
   BridgeRunnerFaultPolicy fault_policy;
 };
@@ -127,11 +130,23 @@ class BridgeStateEgress {
   virtual RunnerCallResult stop() = 0;
 };
 
+class BridgeGamepadRemoteSource {
+ public:
+  virtual ~BridgeGamepadRemoteSource() = default;
+
+  virtual RunnerCallResult start() = 0;
+
+  virtual std::optional<gamepad::CommonGamepad> read() = 0;
+
+  virtual RunnerCallResult stop() = 0;
+};
+
 struct BridgeRunnerDependencies {
   RobotSdkAdapter* adapter{nullptr};
   BridgeCommandIngress* command_ingress{nullptr};
   BridgeStateEgress* state_egress{nullptr};
   extensions::ObservationHook* observation_hook{nullptr};
+  BridgeGamepadRemoteSource* gamepad_remote{nullptr};
 };
 
 class BridgeRunner final : public BridgeCommandSink,

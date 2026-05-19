@@ -25,6 +25,7 @@ enum class TopSection {
   kBridge,
   kDds,
   kDebugPrint,
+  kGamepad,
   kAdapter,
   kJointMapping,
 };
@@ -91,6 +92,12 @@ struct RawBridgeConfig {
   std::optional<bool> debug_print_state;
   std::optional<bool> debug_print_command;
   std::optional<int> debug_print_rate_hz;
+  std::optional<bool> gamepad_enabled;
+  std::optional<std::string> gamepad_backend;
+  std::optional<int> gamepad_controller_index;
+  std::optional<std::string> gamepad_mapping_path;
+  std::optional<int> gamepad_poll_interval_ms;
+  std::optional<int> gamepad_stale_timeout_ms;
   std::optional<std::string> connection_transport;
   std::optional<std::string> connection_interface_hint;
   std::optional<int> read_initial_state_timeout_ms;
@@ -431,6 +438,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
         top = TopSection::kDebugPrint;
         continue;
       }
+      if (line.text == "gamepad:") {
+        top = TopSection::kGamepad;
+        continue;
+      }
       if (line.text == "adapter:") {
         top = TopSection::kAdapter;
         continue;
@@ -680,6 +691,40 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
         } else if (key_value->first == "rate_hz") {
           assign_required<int>(&raw->debug_print_rate_hz,
                                "debug_print.rate_hz", key_value->second,
+                               issues, BridgeConfigIssueCode::kInvalidValue);
+        }
+      }
+      continue;
+    }
+
+    if (top == TopSection::kGamepad) {
+      if (line.indent == 2) {
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid gamepad line: " + line.text);
+          continue;
+        }
+
+        if (key_value->first == "enabled") {
+          assign_required<bool>(&raw->gamepad_enabled, "gamepad.enabled",
+                                key_value->second, issues,
+                                BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "backend") {
+          raw->gamepad_backend = key_value->second;
+        } else if (key_value->first == "controller_index") {
+          assign_required<int>(&raw->gamepad_controller_index,
+                               "gamepad.controller_index", key_value->second,
+                               issues, BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "mapping_path") {
+          raw->gamepad_mapping_path = key_value->second;
+        } else if (key_value->first == "poll_interval_ms") {
+          assign_required<int>(&raw->gamepad_poll_interval_ms,
+                               "gamepad.poll_interval_ms", key_value->second,
+                               issues, BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "stale_timeout_ms") {
+          assign_required<int>(&raw->gamepad_stale_timeout_ms,
+                               "gamepad.stale_timeout_ms", key_value->second,
                                issues, BridgeConfigIssueCode::kInvalidValue);
         }
       }
@@ -1244,6 +1289,12 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   const bool debug_print_state = raw.debug_print_state.value_or(false);
   const bool debug_print_command = raw.debug_print_command.value_or(false);
   const int debug_print_rate_hz = raw.debug_print_rate_hz.value_or(0);
+  const bool gamepad_enabled = raw.gamepad_enabled.value_or(false);
+  const std::string gamepad_backend = raw.gamepad_backend.value_or("sdl");
+  const int gamepad_controller_index = raw.gamepad_controller_index.value_or(0);
+  const std::string gamepad_mapping_path = raw.gamepad_mapping_path.value_or("");
+  const int gamepad_poll_interval_ms = raw.gamepad_poll_interval_ms.value_or(5);
+  const int gamepad_stale_timeout_ms = raw.gamepad_stale_timeout_ms.value_or(100);
   const bool motion_state_required = raw.motion_state_required.value_or(true);
   const std::string motion_state_required_task =
       raw.motion_state_required_task.value_or("joint_bridge");
@@ -1318,6 +1369,26 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   if (debug_print_rate_hz < 0) {
     push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
                "debug_print.rate_hz must be non-negative");
+  }
+  if (gamepad_enabled && gamepad_backend != "sdl") {
+    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+               "gamepad.backend must be sdl");
+  }
+  if (gamepad_controller_index < 0) {
+    push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+               "gamepad.controller_index must be non-negative");
+  }
+  const std::optional<std::uint64_t> gamepad_poll_interval_ns =
+      ms_to_ns(gamepad_poll_interval_ms);
+  if (!gamepad_poll_interval_ns.has_value()) {
+    push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+               "gamepad.poll_interval_ms must be non-negative");
+  }
+  const std::optional<std::uint64_t> gamepad_stale_timeout_ns =
+      ms_to_ns(gamepad_stale_timeout_ms);
+  if (!gamepad_stale_timeout_ns.has_value()) {
+    push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+               "gamepad.stale_timeout_ms must be non-negative");
   }
   if (motion_state_required && motion_state_required_task.empty()) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
@@ -1394,6 +1465,8 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.robot_type = adapter_kind;
   config.runner.loop_period_ns = *loop_period_ns;
   config.runner.command_stale_timeout_ns = *stale_timeout_ns;
+  config.runner.gamepad_poll_interval_ns = *gamepad_poll_interval_ns;
+  config.runner.gamepad_stale_timeout_ns = *gamepad_stale_timeout_ns;
   config.dds.domain_id = static_cast<std::uint32_t>(dds_domain_id);
   config.dds.topics.command = *raw.dds_command_topic;
   config.dds.topics.state = *raw.dds_state_topic;
@@ -1401,6 +1474,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.debug_print.state = debug_print_state;
   config.debug_print.command = debug_print_command;
   config.debug_print.rate_hz = static_cast<std::uint32_t>(debug_print_rate_hz);
+  config.gamepad.enabled = gamepad_enabled;
+  config.gamepad.backend = gamepad_backend;
+  config.gamepad.controller_index = gamepad_controller_index;
+  config.gamepad.mapping_path = gamepad_mapping_path;
   config.runner.startup_idle_policy =
       use_adapter_safe_command ? core::StartupIdlePolicy::kPreferSafeCommand
                                : core::StartupIdlePolicy::kNoCommandWrite;
