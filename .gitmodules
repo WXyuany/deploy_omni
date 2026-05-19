@@ -1,0 +1,4 @@
+[submodule "third_party/robot_shared"]
+	path = third_party/robot_shared
+	url = https://github.com/Zhijie-He/robot_shared
+	branch = main
