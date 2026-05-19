@@ -17,6 +17,7 @@ case "$robot" in
       -DBUILD_ROBOT_KEPLER_K2=OFF
       -DBUILD_ROBOT_PM01=ON
       -DBUILD_ROBOT_UNITREE_G1=OFF
+      -DBUILD_GAMEPAD_SDL=OFF
     )
     ;;
   kepler_k2|k2)
@@ -25,6 +26,7 @@ case "$robot" in
       -DBUILD_ROBOT_KEPLER_K2=ON
       -DBUILD_ROBOT_PM01=OFF
       -DBUILD_ROBOT_UNITREE_G1=OFF
+      -DBUILD_GAMEPAD_SDL=OFF
     )
     ;;
   unitree_g1|g1)
@@ -33,8 +35,9 @@ case "$robot" in
       -DBUILD_ROBOT_KEPLER_K2=OFF
       -DBUILD_ROBOT_PM01=OFF
       -DBUILD_ROBOT_UNITREE_G1=ON
+      -DBUILD_GAMEPAD_SDL=ON
     )
-    build_targets=(adapter_bridge fake_state_publisher state_receiver)
+    build_targets=(adapter_bridge)
     ;;
   all)
     build_dir="${build_dir:-build}"
@@ -42,6 +45,7 @@ case "$robot" in
       -DBUILD_ROBOT_KEPLER_K2=ON
       -DBUILD_ROBOT_PM01=ON
       -DBUILD_ROBOT_UNITREE_G1=ON
+      -DBUILD_GAMEPAD_SDL=ON
     )
     ;;
   *)
@@ -56,3 +60,6 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 
 cmake -S "$repo_root" -B "$repo_root/$build_dir" "${configure_args[@]}"
 cmake --build "$repo_root/$build_dir" --target "${build_targets[@]:-adapter_bridge}"
+
+printf '\nBuilt %s adapter in %s. Start with:\n' "$robot" "$build_dir"
+printf '  %s/%s/adapter_bridge config/g1.sample.yaml\n' "$repo_root" "$build_dir"

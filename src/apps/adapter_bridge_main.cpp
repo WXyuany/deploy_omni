@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdio>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -19,6 +20,13 @@ struct RunnerFrequencyLogState {
                                const int success_code,
                                const int failure_code) {
   return result.succeeded() ? success_code : failure_code;
+}
+
+[[nodiscard]] std::uint64_t monotonic_now_ns() {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
 }
 
 [[nodiscard]] bool is_waiting_detail(const std::string& detail) {
@@ -77,7 +85,7 @@ void print_failure(const char* const stage, const std::string& detail) {
 
     const auto current_status = runner.status();
     if (const auto count = update_runner_frequency_log_state(
-            frequency_state, current_status.last_cycle_time_ns);
+            frequency_state, monotonic_now_ns());
         count.has_value()) {
       std::fprintf(stderr, "runner frequency: %llu Hz\n",
                    static_cast<unsigned long long>(*count));

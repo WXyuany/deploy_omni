@@ -27,6 +27,14 @@ debug_print:
   cmd: true
   rate_hz: 2
 
+gamepad:
+  enabled: false
+  backend: sdl
+  controller_index: 0
+  mapping_path: docs/joy_stick/include/hardware/gamecontrollerdb.txt
+  poll_interval_ms: 5
+  stale_timeout_ms: 100
+
 adapter:
   kind: pm01
   backend: ros2

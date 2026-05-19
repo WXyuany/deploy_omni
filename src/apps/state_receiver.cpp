@@ -12,7 +12,7 @@
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
 
-#include "../../include/bridge/adapters/unitree_g1/unitree_g1_gamepad.hpp"
+#include "../../demo/unitree_g1_gamepad.hpp"
 #include "../../include/bridge/config/bridge_config.hpp"
 
 namespace {
