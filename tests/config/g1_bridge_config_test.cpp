@@ -16,7 +16,13 @@ int main() {
   assert(config.adapter.robot_model == "g1");
   assert(config.adapter.command_mode == "raw_low_level");
   assert(config.adapter.connection.transport == "dds");
-  assert(config.adapter.connection.interface_hint == "wlo1");
+  assert(config.adapter.connection.interface_hint == "wlp0s20f3");
+  assert(config.gamepad.enabled);
+  assert(config.gamepad.backend == "sdl");
+  assert(config.gamepad.controller_index == 0);
+  assert(config.gamepad.mapping_path == "docs/joy_stick/include/hardware/gamecontrollerdb.txt");
+  assert(config.runner.gamepad_poll_interval_ns == 5'000'000U);
+  assert(config.runner.gamepad_stale_timeout_ns == 100'000'000U);
   assert(config.adapter.joint_names.size() == 29U);
   assert(config.joint_map_entries.size() == 29U);
 

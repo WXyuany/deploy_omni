@@ -21,13 +21,28 @@ int main() {
   assert(assembled.assembly->adapter != nullptr);
   assert(assembled.assembly->command_ingress != nullptr);
   assert(assembled.assembly->state_egress != nullptr);
+  assert(assembled.assembly->gamepad_remote == nullptr);
   assert(assembled.assembly->runtime != nullptr);
   assert(assembled.assembly->adapter->name() == std::string_view{"unitree_g1"});
   assert(assembled.assembly->runtime->config.command_topic == "bridge/command");
   assert(assembled.assembly->runtime->config.state_topic == "bridge/state");
   assert(assembled.assembly->runtime->config.network_interface.empty() ||
-         assembled.assembly->runtime->config.network_interface == "robot_lan0" ||
-         assembled.assembly->runtime->config.network_interface == "wlo1");
+          assembled.assembly->runtime->config.network_interface == "robot_lan0" ||
+          assembled.assembly->runtime->config.network_interface == "wlo1" ||
+          assembled.assembly->runtime->config.network_interface == "wlp0s20f3");
+
+#if BRIDGE_BUILD_GAMEPAD_SDL
+  auto gamepad_config = *loaded.config;
+  gamepad_config.gamepad.enabled = true;
+  gamepad_config.gamepad.backend = "sdl";
+  gamepad_config.gamepad.controller_index = 0;
+  auto gamepad_assembled = bridge::app::create_robot_assembly(gamepad_config);
+  assert(gamepad_assembled.succeeded());
+  assert(gamepad_assembled.assembly.has_value());
+  assert(gamepad_assembled.assembly->gamepad_remote != nullptr);
+  assert(gamepad_assembled.assembly->runner_dependencies().gamepad_remote ==
+         gamepad_assembled.assembly->gamepad_remote.get());
+#endif
 
   return 0;
 }

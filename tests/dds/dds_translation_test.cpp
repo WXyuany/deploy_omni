@@ -137,6 +137,8 @@ StateFrame MakeHardwareState() {
   state.joints.motor_state = {81U, 82U};
   state.joints.motor_reserve = {{{91U, 101U, 111U, 121U}},
                                 {{92U, 102U, 112U, 122U}}};
+  state.wireless_remote[0] = 0x11U;
+  state.wireless_remote[39] = 0x39U;
   state.fault = BridgeFault{
       .category = bridge::core::FaultCategory::kCommandStale,
       .severity = bridge::core::FaultSeverity::kRecoverable,
@@ -220,6 +222,8 @@ void TestTranslateHardwareStateToLowStateThroughJointMap() {
   assert(translated.state->motor_state()[1].sensor()[1] == 71U);
   assert(translated.state->motor_state()[0].motorstate() == 82U);
   assert(translated.state->motor_state()[1].reserve()[3] == 121U);
+  assert(translated.state->wireless_remote()[0] == 0x11U);
+  assert(translated.state->wireless_remote()[39] == 0x39U);
   assert(translated.state->imu_state().quaternion()[0] == 0.5F);
   assert(translated.state->imu_state().quaternion()[1] == 0.2F);
   assert(translated.state->imu_state().quaternion()[2] == 0.3F);

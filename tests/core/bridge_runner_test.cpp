@@ -1,9 +1,11 @@
 #include <cassert>
+#include <chrono>
 #include <cstdint>
-#include <memory>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -22,6 +24,7 @@ using bridge::core::BridgeRunner;
 using bridge::core::BridgeRunnerConfig;
 using bridge::core::BridgeRunnerStatus;
 using bridge::core::BridgeRuntimeEventSink;
+using bridge::core::BridgeGamepadRemoteSource;
 using bridge::core::BridgeStateEgress;
 using bridge::core::BridgeCommandIngress;
 using bridge::core::BridgeCommandSink;
@@ -36,6 +39,7 @@ using bridge::core::RunnerCallResult;
 using bridge::core::RunnerCallStatus;
 using bridge::core::StartupIdlePolicy;
 using bridge::core::StateFrame;
+using bridge::gamepad::CommonGamepad;
 using bridge::extensions::HookInvocationContext;
 using bridge::extensions::ObservationHook;
 
@@ -269,6 +273,44 @@ class FakeStateEgress final : public BridgeStateEgress {
   int publish_count_{0};
   int stop_count_{0};
   std::vector<StateFrame> published_states_;
+};
+
+class FakeGamepadRemoteSource final : public BridgeGamepadRemoteSource {
+ public:
+  void set_sample(CommonGamepad gamepad) { next_sample_ = std::move(gamepad); }
+
+  RunnerCallResult start() override {
+    start_count_ += 1;
+    started_ = true;
+    return {.status = RunnerCallStatus::kOk,
+            .detail = "gamepad started",
+            .fault = std::nullopt};
+  }
+
+  std::optional<CommonGamepad> read() override {
+    read_count_ += 1;
+    return next_sample_;
+  }
+
+  RunnerCallResult stop() override {
+    stop_count_ += 1;
+    started_ = false;
+    return {.status = RunnerCallStatus::kOk,
+            .detail = "gamepad stopped",
+            .fault = std::nullopt};
+  }
+
+  [[nodiscard]] bool started() const noexcept { return started_; }
+  [[nodiscard]] int start_count() const noexcept { return start_count_; }
+  [[nodiscard]] int read_count() const noexcept { return read_count_; }
+  [[nodiscard]] int stop_count() const noexcept { return stop_count_; }
+
+ private:
+  bool started_{false};
+  int start_count_{0};
+  int read_count_{0};
+  int stop_count_{0};
+  std::optional<CommonGamepad> next_sample_;
 };
 
 class FakeObservationHook final : public ObservationHook {
@@ -509,6 +551,48 @@ void TestObservationHookSeesPublishedStateAndEffectiveCommand() {
   assert(observation.observed_command_cycles() == std::vector<std::uint64_t>({1}));
 }
 
+void TestFreshGamepadRemoteOverlaysPublishedWirelessRemote() {
+  StateFrame adapter_state = MakeState(1, 100, 100);
+  adapter_state.wireless_remote[0] = 0x80U;
+  FakeRobotSdkAdapter adapter({adapter_state});
+  FakeCommandIngress ingress;
+  FakeStateEgress egress;
+  FakeGamepadRemoteSource gamepad_remote;
+  CommonGamepad gamepad;
+  gamepad.A.update(true);
+  gamepad.lx = 1.0F;
+  gamepad_remote.set_sample(gamepad);
+
+  BridgeRunnerConfig config = MakeConfig();
+  config.gamepad_poll_interval_ns = 1'000'000;
+  config.gamepad_stale_timeout_ns = 1'000'000'000;
+  BridgeRunner runner(config, {.adapter = &adapter,
+                               .command_ingress = &ingress,
+                               .state_egress = &egress,
+                               .gamepad_remote = &gamepad_remote});
+
+  assert(runner.initialize().succeeded());
+  for (int attempt = 0; attempt < 100 && gamepad_remote.read_count() == 0; ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  assert(gamepad_remote.started());
+  assert(gamepad_remote.read_count() > 0);
+
+  assert(runner.run().succeeded());
+
+  assert(egress.publish_count() == 1);
+  const StateFrame& published = egress.published_states().front();
+  float lx = 0.0F;
+  std::memcpy(&lx, published.wireless_remote.data() + 4, sizeof(lx));
+  assert(published.wireless_remote[0] == 0xFEU);
+  assert(published.wireless_remote[1] == 0xEFU);
+  assert((published.wireless_remote[2] & 0x01U) != 0U);
+  assert(lx == 1.0F);
+
+  assert(runner.shutdown().succeeded());
+  assert(gamepad_remote.stop_count() == 1);
+}
+
 }
 
 int main() {
@@ -516,5 +600,6 @@ int main() {
   TestStaleCommandTriggersFailStop();
   TestWaitingForInitialStateDoesNotFailStopRunner();
   TestObservationHookSeesPublishedStateAndEffectiveCommand();
+  TestFreshGamepadRemoteOverlaysPublishedWirelessRemote();
   return 0;
 }

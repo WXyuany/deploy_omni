@@ -177,6 +177,13 @@ void TestLoadsSampleBridgeConfig() {
   assert(config.adapter.command_mode == "torque_pd_passthrough");
   assert(config.adapter.connection.transport == "udp");
   assert(config.adapter.connection.interface_hint == "robot_lan0");
+  assert(!config.gamepad.enabled);
+  assert(config.gamepad.backend == "sdl");
+  assert(config.gamepad.controller_index == 0);
+  assert(config.gamepad.mapping_path ==
+         "docs/joy_stick/include/hardware/gamecontrollerdb.txt");
+  assert(config.runner.gamepad_poll_interval_ns == 5'000'000U);
+  assert(config.runner.gamepad_stale_timeout_ns == 100'000'000U);
   assert(config.adapter.startup.read_initial_state_timeout_ns == 1'000'000'000U);
   assert(config.adapter.startup.require_healthy_hardware);
   assert(config.adapter.safety.safe_command_profile == "zero_torque");
@@ -213,8 +220,15 @@ void TestLoadsPm01SampleBridgeConfig() {
   assert(!config.adapter.motion_state.required);
   assert(config.adapter.motion_state.required_task == "joint_bridge");
   assert(!config.adapter.motion_state.initial_task.has_value());
-  assert(config.debug_print.state);
-  assert(!config.debug_print.command);
+  assert(!config.gamepad.enabled);
+  assert(config.gamepad.backend == "sdl");
+  assert(config.gamepad.controller_index == 0);
+  assert(config.gamepad.mapping_path ==
+         "docs/joy_stick/include/hardware/gamecontrollerdb.txt");
+  assert(config.runner.gamepad_poll_interval_ns == 5'000'000U);
+  assert(config.runner.gamepad_stale_timeout_ns == 100'000'000U);
+  assert(!config.debug_print.state);
+  assert(config.debug_print.command);
   assert(config.debug_print.rate_hz == 2U);
   assert(config.adapter.joint_names.size() == 24U);
   assert(config.adapter.joint_names.front() == "l_hip_yaw");
@@ -242,7 +256,12 @@ void TestLoadsUnitreeG1SampleBridgeConfig() {
   assert(config.adapter.robot_model == "g1");
   assert(config.adapter.command_mode == "raw_low_level");
   assert(config.adapter.connection.transport == "dds");
-  assert(config.adapter.connection.interface_hint == "robot_lan0");
+  assert(config.adapter.connection.interface_hint == "wlp0s20f3");
+  assert(config.gamepad.enabled);
+  assert(config.gamepad.mapping_path ==
+         "docs/joy_stick/include/hardware/gamecontrollerdb.txt");
+  assert(config.runner.gamepad_poll_interval_ns == 5'000'000U);
+  assert(config.runner.gamepad_stale_timeout_ns == 100'000'000U);
   assert(config.adapter.safety.safe_command_profile == "zero_torque");
   assert(config.adapter.joint_names.size() == 29U);
   assert(config.joint_map_entries.size() == 29U);
@@ -784,6 +803,31 @@ void TestRejectsNegativeDdsDomainId() {
   assert(HasIssueCode(result, BridgeConfigIssueCode::kInvalidValue));
 }
 
+void TestLoadsGamepadConfig() {
+  const std::string path = WritePm01Config("bridge_config_gamepad_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "gamepad:\n"
+           << "  enabled: true\n"
+           << "  backend: sdl\n"
+           << "  controller_index: 2\n"
+           << "  mapping_path: docs/joy_stick/include/hardware/gamecontrollerdb.txt\n"
+           << "  poll_interval_ms: 7\n"
+           << "  stale_timeout_ms: 123\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->gamepad.enabled);
+  assert(result.config->gamepad.backend == "sdl");
+  assert(result.config->gamepad.controller_index == 2);
+  assert(result.config->gamepad.mapping_path ==
+         "docs/joy_stick/include/hardware/gamecontrollerdb.txt");
+  assert(result.config->runner.gamepad_poll_interval_ns == 7'000'000U);
+  assert(result.config->runner.gamepad_stale_timeout_ns == 123'000'000U);
+}
+
 }
 
 int main() {
@@ -804,5 +848,6 @@ int main() {
   TestLoadsUnknownRobotKindAsFactoryInput();
   TestLoadsPm01ConfigAsFactoryInput();
   TestRejectsNegativeDdsDomainId();
+  TestLoadsGamepadConfig();
   return 0;
 }

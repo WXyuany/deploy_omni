@@ -136,6 +136,8 @@ StateFrame MakeStateFrame() {
   state.joints.motor_state = {81U, 82U};
   state.joints.motor_reserve = {{{91U, 101U, 111U, 121U}},
                                 {{92U, 102U, 112U, 122U}}};
+  state.wireless_remote[0] = 0x21U;
+  state.wireless_remote[39] = 0x40U;
   state.imu = bridge::core::ImuSample{
       .sample_time_ns = 9005U,
       .valid = true,
@@ -229,6 +231,8 @@ void TestEncodeTypedStatePublications() {
   assert(state_msg.motor_state()[1].sensor()[0] == 62U);
   assert(state_msg.motor_state()[1].motorstate() == 82U);
   assert(state_msg.motor_state()[1].reserve()[3] == 122U);
+  assert(state_msg.wireless_remote()[0] == 0x21U);
+  assert(state_msg.wireless_remote()[39] == 0x40U);
   assert(state_msg.imu_state().quaternion()[0] == 0.70710677F ||
          state_msg.imu_state().quaternion()[0] == 0.70710678F);
   assert(state_msg.imu_state().rpy()[0] == 0.11F);

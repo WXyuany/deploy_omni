@@ -26,6 +26,36 @@ bridge::config::BridgeConfigLoadResult LoadSampleConfig() {
 #endif
 }
 
+std::string SamplePath(const std::string& relative_path) {
+#ifdef BRIDGE_REPO_ROOT
+  return std::string(BRIDGE_REPO_ROOT) + "/" + relative_path;
+#else
+  return "../" + relative_path;
+#endif
+}
+
+std::string WriteSampleConfigWithGamepadEnabled(const std::string& relative_path,
+                                                const std::string& output_path) {
+  std::ifstream input(SamplePath(relative_path));
+  std::ofstream output(output_path);
+  std::string line;
+  bool in_gamepad = false;
+  while (std::getline(input, line)) {
+    if (line == "gamepad:") {
+      in_gamepad = true;
+      output << line << '\n';
+      continue;
+    }
+    if (in_gamepad && line == "  enabled: false") {
+      output << "  enabled: true\n";
+      in_gamepad = false;
+      continue;
+    }
+    output << line << '\n';
+  }
+  return output_path;
+}
+
 std::string WritePm01Config(const std::string& path) {
   static const std::vector<std::string> kJointNames{
       "l_hip_yaw",       "l_hip_roll",      "l_hip_pitch",
@@ -119,6 +149,7 @@ void TestCreatesKeplerAssemblyFromSampleConfig() {
   assert(assembled.assembly->adapter != nullptr);
   assert(assembled.assembly->command_ingress != nullptr);
   assert(assembled.assembly->state_egress != nullptr);
+  assert(assembled.assembly->gamepad_remote == nullptr);
   assert(assembled.assembly->adapter->name() == std::string_view{"kepler_k2"});
 
   bridge::core::BridgeRunner runner(loaded.config->runner,
@@ -127,6 +158,44 @@ void TestCreatesKeplerAssemblyFromSampleConfig() {
   assert(runner.run().succeeded());
   assert(runner.request_stop().succeeded());
   assert(runner.shutdown().succeeded());
+#endif
+}
+
+void TestCreatesGamepadRemoteWhenEnabled() {
+#if BRIDGE_BUILD_KEPLER_K2 && BRIDGE_BUILD_GAMEPAD_SDL
+  const std::string path = WriteSampleConfigWithGamepadEnabled(
+      "config/kepler_k2.sample.yaml", "kepler_gamepad_enabled_test.yaml");
+  bridge::config::BridgeConfigLoadResult loaded =
+      bridge::config::load_bridge_config(path);
+  assert(loaded.succeeded());
+  assert(loaded.config.has_value());
+
+  bridge::app::RobotAssemblyCreateResult assembled =
+      bridge::app::create_robot_assembly(*loaded.config);
+  assert(assembled.succeeded());
+  assert(assembled.assembly.has_value());
+  assert(assembled.assembly->gamepad_remote != nullptr);
+  assert(assembled.assembly->runner_dependencies().gamepad_remote ==
+         assembled.assembly->gamepad_remote.get());
+#endif
+}
+
+void TestCreatesPm01GamepadRemoteWhenConfigEnabled() {
+#if BRIDGE_BUILD_PM01 && BRIDGE_BUILD_GAMEPAD_SDL
+  const std::string path = WriteSampleConfigWithGamepadEnabled(
+      "config/pm01.sample.yaml", "pm01_gamepad_enabled_test.yaml");
+  const bridge::config::BridgeConfigLoadResult loaded =
+      bridge::config::load_bridge_config(path);
+  assert(loaded.succeeded());
+  assert(loaded.config.has_value());
+
+  bridge::app::RobotAssemblyCreateResult assembled =
+      bridge::app::create_robot_assembly(*loaded.config);
+  assert(assembled.succeeded());
+  assert(assembled.assembly.has_value());
+  assert(assembled.assembly->gamepad_remote != nullptr);
+  assert(assembled.assembly->runner_dependencies().gamepad_remote ==
+         assembled.assembly->gamepad_remote.get());
 #endif
 }
 
@@ -247,6 +316,8 @@ void TestRegisteredRobotTypesIncludesKeplerK2() {
 
 int main() {
   TestCreatesKeplerAssemblyFromSampleConfig();
+  TestCreatesGamepadRemoteWhenEnabled();
+  TestCreatesPm01GamepadRemoteWhenConfigEnabled();
   TestRejectsUnsupportedRobotType();
   TestRegisteredRobotTypesIncludesKeplerK2();
   TestRegisteredRobotTypesIncludesPm01();
