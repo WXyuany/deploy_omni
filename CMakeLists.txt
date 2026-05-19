@@ -5,6 +5,7 @@ project(adapter_any_robot LANGUAGES CXX)
 option(BUILD_ROBOT_KEPLER_K2 "Build kepler_k2 adapter support" ON)
 option(BUILD_ROBOT_PM01 "Build pm01 adapter support" ON)
 option(BUILD_ROBOT_UNITREE_G1 "Build unitree_g1 adapter support" ON)
+option(BUILD_GAMEPAD_SDL "Build SDL2 gamepad input support" ON)
 
 if(NOT BUILD_ROBOT_KEPLER_K2 AND NOT BUILD_ROBOT_PM01 AND NOT BUILD_ROBOT_UNITREE_G1)
   message(FATAL_ERROR "At least one robot adapter must be enabled. Set BUILD_ROBOT_KEPLER_K2, BUILD_ROBOT_PM01, or BUILD_ROBOT_UNITREE_G1 to ON.")
@@ -45,12 +46,6 @@ include(CTest)
 add_library(bridge_project_options INTERFACE)
 target_compile_features(bridge_project_options INTERFACE cxx_std_17)
 
-configure_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/bridge/build_config.hpp.in"
-  "${CMAKE_CURRENT_BINARY_DIR}/generated/bridge/build_config.hpp"
-  @ONLY
-)
-
 target_include_directories(bridge_project_options INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -67,6 +62,26 @@ target_link_options(bridge_project_options INTERFACE
 
 find_package(Threads REQUIRED)
 find_package(rclcpp QUIET)
+if(BUILD_GAMEPAD_SDL)
+  find_package(SDL2 QUIET CONFIG)
+  if(NOT TARGET SDL2::SDL2)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+      pkg_check_modules(SDL2 QUIET IMPORTED_TARGET sdl2)
+    endif()
+  endif()
+endif()
+
+set(BRIDGE_BUILD_GAMEPAD_SDL 0)
+if(BUILD_GAMEPAD_SDL AND (TARGET SDL2::SDL2 OR TARGET PkgConfig::SDL2))
+  set(BRIDGE_BUILD_GAMEPAD_SDL 1)
+endif()
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/bridge/build_config.hpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/bridge/build_config.hpp"
+  @ONLY
+)
 
 set(BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party/interface_protocol")
@@ -208,16 +223,39 @@ target_include_directories(bridge_cyclonedds_options INTERFACE
   "${BRIDGE_CYCLONE_SDK_DIR}/include"
   "${BRIDGE_CYCLONE_SDK_DIR}/include/ddscxx")
 
+add_library(bridge_gamepad STATIC
+  src/bridge/gamepad/common_gamepad.cpp
+)
+target_link_libraries(bridge_gamepad PUBLIC bridge_project_options)
+
+if(BUILD_GAMEPAD_SDL AND (TARGET SDL2::SDL2 OR TARGET PkgConfig::SDL2))
+  add_library(bridge_gamepad_sdl STATIC
+    src/bridge/gamepad/sdl_gamepad.cpp
+  )
+  target_link_libraries(bridge_gamepad_sdl PUBLIC bridge_gamepad)
+  if(TARGET SDL2::SDL2)
+    target_link_libraries(bridge_gamepad_sdl PUBLIC SDL2::SDL2)
+  else()
+    target_link_libraries(bridge_gamepad_sdl PUBLIC PkgConfig::SDL2)
+  endif()
+endif()
+
 add_library(bridge_core STATIC
   src/bridge/core/bridge_runner.cpp
 )
-target_link_libraries(bridge_core PUBLIC bridge_project_options)
+target_link_libraries(bridge_core PUBLIC bridge_project_options bridge_gamepad)
 
 add_library(bridge_dds_codecs STATIC
   src/bridge/dds/dds_translation.cpp
 )
 target_link_libraries(bridge_dds_codecs PUBLIC bridge_cyclonedds_options bridge_core)
 add_dependencies(bridge_dds_codecs unitree_sdk2_nomain)
+
+add_library(bridge_config STATIC
+  src/bridge/config/bridge_config.cpp
+  src/bridge/config/joint_map.cpp
+)
+target_link_libraries(bridge_config PUBLIC bridge_project_options bridge_core)
 
 add_library(bridge_dds_runtime STATIC
   src/bridge/dds/dds_runtime.cpp
@@ -232,12 +270,6 @@ target_link_libraries(bridge_dds_runtime PUBLIC
   bridge_dds_codecs
 )
 add_dependencies(bridge_dds_runtime unitree_sdk2_nomain)
-
-add_library(bridge_config STATIC
-  src/bridge/config/bridge_config.cpp
-  src/bridge/config/joint_map.cpp
-)
-target_link_libraries(bridge_config PUBLIC bridge_project_options bridge_core)
 
 if(BUILD_ROBOT_KEPLER_K2)
   add_library(bridge_adapter_kepler_k2 STATIC
@@ -289,12 +321,23 @@ if(BUILD_ROBOT_UNITREE_G1)
     src/bridge/adapters/unitree_g1/unitree_g1_low_level_protocol.cpp
     src/bridge/adapters/unitree_g1/unitree_g1_adapter.cpp
     src/bridge/adapters/unitree_g1/unitree_g1_low_level_session.cpp
-    src/bridge/adapters/unitree_g1/unitree_g1_gamepad.cpp
   )
   target_link_libraries(bridge_adapter_unitree_g1 PUBLIC
     bridge_project_options
     bridge_cyclonedds_options)
   add_dependencies(bridge_adapter_unitree_g1 unitree_sdk2_nomain)
+endif()
+
+add_library(gamepad_demo_support STATIC
+  demo/unitree_g1_gamepad.cpp
+  demo/gamepad_table.cpp
+)
+target_link_libraries(gamepad_demo_support PUBLIC
+  bridge_project_options
+  bridge_gamepad
+)
+if(TARGET bridge_gamepad_sdl)
+  target_link_libraries(gamepad_demo_support PUBLIC bridge_gamepad_sdl)
 endif()
 
 add_library(bridge_extensions STATIC
@@ -321,6 +364,9 @@ if(BUILD_ROBOT_PM01)
 endif()
 if(BUILD_ROBOT_UNITREE_G1)
   target_link_libraries(bridge_app_support PUBLIC bridge_adapter_unitree_g1)
+endif()
+if(TARGET bridge_gamepad_sdl)
+  target_link_libraries(bridge_app_support PUBLIC bridge_gamepad_sdl)
 endif()
 
 add_executable(adapter_bridge
@@ -356,12 +402,41 @@ if(BUILD_ROBOT_UNITREE_G1)
   target_link_libraries(state_receiver PRIVATE
     bridge_cyclonedds_options
     bridge_config
-    bridge_adapter_unitree_g1
+    gamepad_demo_support
   )
   set_target_properties(state_receiver PROPERTIES
     BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
   )
   add_dependencies(state_receiver unitree_sdk2_nomain)
+
+  add_executable(gamepad_dds_receiver
+    demo/gamepad_dds_receiver.cpp
+  )
+  target_link_libraries(gamepad_dds_receiver PRIVATE
+    bridge_cyclonedds_options
+    bridge_config
+    gamepad_demo_support
+  )
+  set_target_properties(gamepad_dds_receiver PROPERTIES
+    BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
+  )
+  add_dependencies(gamepad_dds_receiver unitree_sdk2_nomain)
+
+  if(TARGET bridge_gamepad_sdl)
+    add_executable(gamepad_dds_sender
+      demo/gamepad_dds_sender.cpp
+    )
+    target_link_libraries(gamepad_dds_sender PRIVATE
+      bridge_cyclonedds_options
+      bridge_config
+      bridge_gamepad_sdl
+      gamepad_demo_support
+    )
+    set_target_properties(gamepad_dds_sender PROPERTIES
+      BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
+    )
+    add_dependencies(gamepad_dds_sender unitree_sdk2_nomain)
+  endif()
 endif()
 
 if(BUILD_TESTING)
@@ -409,6 +484,20 @@ if(BUILD_TESTING)
     bridge_project_options
     bridge_config
   )
+
+  bridge_add_test(common_gamepad_test
+    tests/gamepad/common_gamepad_test.cpp
+    bridge_project_options
+    bridge_gamepad
+  )
+
+  if(TARGET bridge_gamepad_sdl)
+    bridge_add_test(sdl_gamepad_test
+      tests/gamepad/sdl_gamepad_test.cpp
+      bridge_project_options
+      bridge_gamepad_sdl
+    )
+  endif()
 
   bridge_add_test(fake_transport_test
     tests/dds/fake_transport_test.cpp
@@ -471,8 +560,9 @@ if(BUILD_TESTING)
           target_link_libraries(pm01_adapter_test PRIVATE ${interface_target})
         endif()
       endforeach()
-    endif()
   endif()
+
+endif()
 
   if(BUILD_ROBOT_UNITREE_G1)
     bridge_add_test(unitree_g1_adapter_test
@@ -496,7 +586,8 @@ if(BUILD_TESTING)
     bridge_add_test(unitree_g1_gamepad_test
       tests/adapters/unitree_g1_gamepad_test.cpp
       bridge_project_options
-      bridge_adapter_unitree_g1
+      gamepad_demo_support
+      bridge_gamepad
     )
   endif()
 
@@ -504,6 +595,12 @@ if(BUILD_TESTING)
     tests/extensions/hooks_isolation_test.cpp
     bridge_project_options
     bridge_extensions
+  )
+
+  bridge_add_test(gamepad_table_test
+    tests/demo/gamepad_table_test.cpp
+    bridge_project_options
+    gamepad_demo_support
   )
 
   bridge_add_test(robot_assembly_factory_test

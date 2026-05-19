@@ -70,4 +70,7 @@ void update_gamepad_from_wireless_remote(
 
 [[nodiscard]] std::string format_gamepad_status(const G1Gamepad& gamepad);
 
+[[nodiscard]] std::string format_wireless_remote_gamepad_status(
+    G1Gamepad& gamepad, const std::array<std::uint8_t, 40>& wireless_remote);
+
 }  // namespace bridge::adapters::unitree_g1
