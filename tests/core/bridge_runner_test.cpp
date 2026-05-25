@@ -395,7 +395,10 @@ void TestHappyPathLifecycleProgression() {
   assert(submission.result.succeeded());
   assert(submission.stored_sequence == 7);
   assert(!submission.replaced_previous);
-  assert(adapter.write_command_count() == 0);
+  assert(adapter.write_command_count() == 1);
+  assert(adapter.last_written_command().has_value());
+  assert(adapter.last_written_command()->sequence == 7);
+  assert(adapter.last_written_command()->mode == ControlMode::kTorque);
   assert(adapter.write_safe_command_count() == 0);
   assert(ingress.callback_submit_count() == 1);
 
@@ -427,7 +430,7 @@ void TestHappyPathLifecycleProgression() {
   assert(egress.published_states().size() == 1U);
   const StateFrame& published = egress.published_states().front();
   assert(published.lifecycle_state == LifecycleState::kActive);
-  assert(published.active_mode == ControlMode::kSafeIdle);
+  assert(published.active_mode == ControlMode::kTorque);
   assert(!published.command_stale);
   assert(!published.fault.has_value());
 
@@ -435,7 +438,7 @@ void TestHappyPathLifecycleProgression() {
   assert(shutdown.succeeded());
   assert(ingress.stop_count() == 1);
   assert(egress.stop_count() == 1);
-  assert(adapter.write_safe_command_count() == 1);
+  assert(adapter.write_safe_command_count() == 0);
   assert(adapter.shutdown_count() == 1);
   assert(runner.status().lifecycle_state == LifecycleState::kStopped);
 }
@@ -454,7 +457,7 @@ void TestStaleCommandTriggersFailStop() {
   const CommandSubmissionResult submission =
       ingress.submit_from_callback(MakeCommand(9, 100, ControlMode::kVelocity));
   assert(submission.result.succeeded());
-  assert(adapter.write_command_count() == 0);
+  assert(adapter.write_command_count() == 1);
 
   const RunnerCallResult first_run = runner.run();
   assert(first_run.succeeded());
@@ -464,21 +467,21 @@ void TestStaleCommandTriggersFailStop() {
   assert(faulted.fail_stop_active);
   assert(faulted.degraded);
   assert(faulted.command_buffer.has_latest_command);
-  assert(!faulted.command_buffer.has_active_command);
+  assert(faulted.command_buffer.has_active_command);
   assert(faulted.command_buffer.latest_command_stale);
   assert(faulted.latched_fault.has_value());
   assert(faulted.latched_fault->category == FaultCategory::kCommandStale);
   assert(faulted.latched_fault->latched);
-  assert(adapter.write_command_count() == 0);
-  assert(adapter.write_safe_command_count() == 1);
+  assert(adapter.write_command_count() == 1);
+  assert(adapter.write_safe_command_count() == 0);
   assert(egress.publish_count() == 1);
   assert(egress.published_states().front().lifecycle_state == LifecycleState::kActive);
   assert(!egress.published_states().front().fault.has_value());
 
   const RunnerCallResult second_run = runner.run();
   assert(second_run.succeeded());
-  assert(adapter.write_command_count() == 0);
-  assert(adapter.write_safe_command_count() == 1);
+  assert(adapter.write_command_count() == 1);
+  assert(adapter.write_safe_command_count() == 0);
   assert(egress.publish_count() == 2);
   const StateFrame& fault_published = egress.published_states().back();
   assert(fault_published.lifecycle_state == LifecycleState::kFaulted);

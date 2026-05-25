@@ -18,9 +18,9 @@ dds:
   domain_id: 0
   topics:
     command:
-      name: bridge/command
+      name: bridge/rt/lowcmd
     state:
-      name: bridge/state
+      name: bridge/rt/lowstate
 
 debug_print:
   state: false
@@ -42,7 +42,8 @@ adapter:
   command_mode: raw_low_level
   connection:
     transport: dds
-    interface_hint: wlp0s20f3
+    interface_hint: enx9c69d3018e32 
+    interface_hint_1: #wlp0s20f3
   startup:
     read_initial_state_timeout_ms: 1000
     require_healthy_hardware: true

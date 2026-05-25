@@ -90,7 +90,7 @@ set(BRIDGE_INTERFACE_PROTOCOL_BUILD_DIR
 set(BRIDGE_INTERFACE_PROTOCOL_INSTALL_DIR
   "${CMAKE_CURRENT_BINARY_DIR}/vendor/interface_protocol-install")
 
-if(EXISTS "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}/CMakeLists.txt")
+if(BUILD_ROBOT_PM01 AND EXISTS "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}/CMakeLists.txt")
   file(GLOB BRIDGE_INTERFACE_PROTOCOL_SOURCE_FILES CONFIGURE_DEPENDS
     "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}/CMakeLists.txt"
     "${BRIDGE_INTERFACE_PROTOCOL_SOURCE_DIR}/package.xml"
@@ -340,6 +340,14 @@ if(TARGET bridge_gamepad_sdl)
   target_link_libraries(gamepad_demo_support PUBLIC bridge_gamepad_sdl)
 endif()
 
+add_executable(common_gamepad_wireless_codec_demo
+  demo/common_gamepad_wireless_codec_demo.cpp
+)
+target_link_libraries(common_gamepad_wireless_codec_demo PRIVATE
+  bridge_project_options
+  bridge_gamepad
+)
+
 add_library(bridge_extensions STATIC
   src/bridge/extensions/legacy_kepler_hooks.cpp
   src/bridge/extensions/terminal_observation_hook.cpp
@@ -395,6 +403,10 @@ if(BUILD_ROBOT_UNITREE_G1)
     BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
   )
   add_dependencies(fake_state_publisher unitree_sdk2_nomain)
+  add_test(NAME fake_state_publisher_help_test COMMAND fake_state_publisher --help)
+  set_tests_properties(fake_state_publisher_help_test PROPERTIES
+    PASS_REGULAR_EXPRESSION "custom/mujoco/rt/lowstate.*rt/secondary_imu"
+  )
 
   add_executable(state_receiver
     src/apps/state_receiver.cpp
@@ -408,6 +420,10 @@ if(BUILD_ROBOT_UNITREE_G1)
     BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
   )
   add_dependencies(state_receiver unitree_sdk2_nomain)
+  add_test(NAME state_receiver_help_test COMMAND state_receiver --help)
+  set_tests_properties(state_receiver_help_test PROPERTIES
+    PASS_REGULAR_EXPRESSION "Prints the latest state at 50 Hz"
+  )
 
   add_executable(gamepad_dds_receiver
     demo/gamepad_dds_receiver.cpp
@@ -626,6 +642,14 @@ endif()
     )
     target_compile_definitions(g1_robot_assembly_test PRIVATE
       BRIDGE_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    bridge_add_test(fake_g1_state_pipeline_test
+      tests/apps/fake_g1_state_pipeline_test.cpp
+      bridge_project_options
+      bridge_adapter_unitree_g1
+      bridge_config
+      bridge_dds_codecs
     )
   endif()
 

@@ -156,7 +156,6 @@ class BridgeRunner::Impl {
     AdapterHealthResult health = dependencies_.adapter->query_health();
     if (!health.result.succeeded()) {
       std::lock_guard<std::mutex> lock(mutex_);
-      cached_safe_command_supported_ = false;
       return handle_adapter_failure_locked(
           health.result, FaultCategory::kAdapterHealth,
           "adapter health query failed during initialize", true);
@@ -164,7 +163,6 @@ class BridgeRunner::Impl {
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      cached_safe_command_supported_ = health.health.safe_command_supported;
       update_health_locked(health);
     }
 
@@ -314,9 +312,7 @@ class BridgeRunner::Impl {
   [[nodiscard]] RunnerCallResult shutdown() {
     RunnerCallResult ingress_stop_result;
     RunnerCallResult egress_stop_result;
-    AdapterCallResult safe_write_result;
     AdapterCallResult adapter_shutdown_result;
-    bool write_safe_command = false;
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -328,7 +324,6 @@ class BridgeRunner::Impl {
 
       status_.stop_requested = true;
       status_.lifecycle_state = LifecycleState::kStopping;
-      write_safe_command = cached_safe_command_supported_;
     }
 
     stop_gamepad_remote();
@@ -337,9 +332,6 @@ class BridgeRunner::Impl {
       ingress_stop_result = dependencies_.command_ingress->stop();
     }
     stop_gamepad_remote();
-    if (write_safe_command && dependencies_.adapter != nullptr) {
-      safe_write_result = dependencies_.adapter->write_safe_command();
-    }
     if (dependencies_.state_egress != nullptr) {
       egress_stop_result = dependencies_.state_egress->stop();
     }
@@ -358,20 +350,6 @@ class BridgeRunner::Impl {
       final_status = ingress_stop_result.status;
       detail = ingress_stop_result.detail;
       update_degraded_from_runner_locked(ingress_stop_result);
-    }
-
-    if (write_safe_command && !safe_write_result.succeeded()) {
-      final_status = map_adapter_status(safe_write_result.status);
-      detail = safe_write_result.detail;
-      update_degraded_from_adapter_locked(safe_write_result);
-      if (is_error_status(safe_write_result.status)) {
-        BridgeFault fault = safe_write_result.fault.value_or(make_fault(
-            FaultCategory::kSafety, FaultSeverity::kRecoverable,
-            LifecycleState::kStopping, "safe command write during shutdown failed",
-            status_.last_cycle_time_ns));
-        fault.lifecycle_state = LifecycleState::kStopping;
-        finalize_fault_locked(&fault);
-      }
     }
 
     if (dependencies_.state_egress != nullptr && !egress_stop_result.succeeded()) {
@@ -400,36 +378,65 @@ class BridgeRunner::Impl {
 
   [[nodiscard]] CommandSubmissionResult submit_latest_command(
       CommandFrame command) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    CommandFrame command_to_write = command;
+    bool replaced_previous = false;
 
-    if (status_.lifecycle_state == LifecycleState::kStopping ||
-        status_.lifecycle_state == LifecycleState::kStopped) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+
+      if (status_.lifecycle_state == LifecycleState::kStopping ||
+          status_.lifecycle_state == LifecycleState::kStopped) {
+        CommandSubmissionResult submission;
+        submission.result = make_runner_result(RunnerCallStatus::kRejected,
+                                               "runner is stopping or stopped");
+        return submission;
+      }
+      // if (!command.valid || command.mode == ControlMode::kUnknown) {
+      //   CommandSubmissionResult submission;
+      //   submission.result = make_runner_result(RunnerCallStatus::kRejected,
+      //                                          "invalid command rejected");
+      //   return submission;
+      // }
+
+      replaced_previous = status_.command_buffer.has_latest_command;
+      status_.command_buffer.has_latest_command = true;
+      status_.command_buffer.latest_command_stale = false;
+      status_.command_buffer.latest_command_sequence = command.sequence;
+      status_.command_buffer.latest_command_receive_time_ns =
+          command.receive_time_ns;
+      latest_command_ = std::move(command);
+      status_.first_command_received = true;
+    }
+
+    AdapterCallResult write_result =
+        dependencies_.adapter->write_command(command_to_write);
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!write_result.succeeded()) {
       CommandSubmissionResult submission;
-      submission.result = make_runner_result(RunnerCallStatus::kRejected,
-                                             "runner is stopping or stopped");
+      submission.replaced_previous = replaced_previous;
+      submission.stored_sequence = status_.command_buffer.latest_command_sequence;
+      submission.result = handle_adapter_failure_locked(
+          write_result, FaultCategory::kAdapterWrite,
+          "adapter command write failed", true);
       return submission;
     }
-    // if (!command.valid || command.mode == ControlMode::kUnknown) {
-    //   CommandSubmissionResult submission;
-    //   submission.result = make_runner_result(RunnerCallStatus::kRejected,
-    //                                          "invalid command rejected");
-    //   return submission;
-    // }
 
-    const bool replaced_previous = status_.command_buffer.has_latest_command;
-    status_.command_buffer.has_latest_command = true;
-    status_.command_buffer.latest_command_stale = false;
-    status_.command_buffer.latest_command_sequence = command.sequence;
-    status_.command_buffer.latest_command_receive_time_ns =
-        command.receive_time_ns;
-    latest_command_ = std::move(command);
-    status_.first_command_received = true;
+    status_.startup_idle_active = false;
+    status_.command_stale = false;
+    status_.command_buffer.has_active_command = true;
+    status_.command_buffer.active_command_sequence = command_to_write.sequence;
+    status_.command_buffer.active_mode = command_to_write.mode;
+    update_degraded_from_adapter_locked(write_result);
 
     CommandSubmissionResult submission;
     submission.replaced_previous = replaced_previous;
     submission.stored_sequence = status_.command_buffer.latest_command_sequence;
-    submission.result = make_runner_result(RunnerCallStatus::kOk,
-                                           "latest command stored");
+    submission.result = make_runner_result(
+        write_result.status == AdapterCallStatus::kDegraded
+            ? RunnerCallStatus::kDegraded
+            : RunnerCallStatus::kOk,
+        "latest command written", status_.latched_fault);
     return submission;
   }
 
@@ -658,8 +665,6 @@ class BridgeRunner::Impl {
     AdapterHealthResult health = dependencies_.adapter->query_health();
 
     std::lock_guard<std::mutex> lock(mutex_);
-    cached_safe_command_supported_ =
-        health.result.succeeded() && health.health.safe_command_supported;
     if (!health.result.succeeded()) {
       return handle_adapter_failure_locked(
           health.result, FaultCategory::kAdapterHealth,
@@ -706,81 +711,33 @@ class BridgeRunner::Impl {
 
   [[nodiscard]] RunnerCallResult apply_command_policy(
       const std::uint64_t cycle_time_ns) {
-    std::optional<CommandFrame> command_to_write;
+    std::optional<CommandFrame> command_to_observe;
     bool issue_startup_idle = false;
-    bool issue_fault_safe_command = false;
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
       update_command_staleness_locked(cycle_time_ns);
 
-      if (status_.fail_stop_active) {
-        issue_fault_safe_command =
-            config_.fault_policy.write_safe_command_on_fault &&
-            cached_safe_command_supported_ && !fault_safe_command_written_;
-      } else if (status_.command_buffer.has_latest_command &&
+      if (status_.command_buffer.has_latest_command &&
                  !status_.command_buffer.latest_command_stale) {
-        command_to_write = latest_command_;
+        command_to_observe = latest_command_;
       } else {
         issue_startup_idle = !status_.first_command_received;
       }
     }
 
-    if (issue_fault_safe_command) {
-      AdapterCallResult safe_result = dependencies_.adapter->write_safe_command();
+    if (command_to_observe.has_value()) {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (!safe_result.succeeded()) {
-        return handle_adapter_failure_locked(
-            safe_result, FaultCategory::kSafety,
-            "safe command write failed while faulted", true);
-      }
-      fault_safe_command_written_ = true;
-      status_.startup_idle_active = false;
-      update_degraded_from_adapter_locked(safe_result);
-      return make_runner_result(safe_result.status == AdapterCallStatus::kDegraded
-                                    ? RunnerCallStatus::kDegraded
-                                    : RunnerCallStatus::kOk,
-                                "fault safe command written",
-                                status_.latched_fault);
-    }
-
-    if (command_to_write.has_value()) {
-      std::fprintf(stderr,
-                   "runner active command selected: seq=%llu mode=%s\n",
-                   static_cast<unsigned long long>(command_to_write->sequence),
-                   command_to_write->mode_label.c_str());
-      AdapterCallResult write_result =
-          dependencies_.adapter->write_command(*command_to_write);
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!write_result.succeeded()) {
-        std::fprintf(stderr,
-                     "runner active command write failed: %s\n",
-                     write_result.detail.c_str());
-        return handle_adapter_failure_locked(write_result,
-                                             FaultCategory::kAdapterWrite,
-                                             "adapter command write failed",
-                                             true);
-      }
-      std::fprintf(stderr,
-                   "runner active command write succeeded: seq=%llu detail=%s\n",
-                   static_cast<unsigned long long>(command_to_write->sequence),
-                   write_result.detail.c_str());
-
-      status_.startup_idle_active = false;
       status_.command_stale = false;
-      status_.command_buffer.has_active_command = true;
-      status_.command_buffer.active_command_sequence = command_to_write->sequence;
-      status_.command_buffer.active_mode = command_to_write->mode;
       if (dependencies_.observation_hook != nullptr) {
         dependencies_.observation_hook->observe_command(
-            *command_to_write,
+            *command_to_observe,
             {.cycle_index = status_.cycle_count, .time_ns = cycle_time_ns});
       }
-      update_degraded_from_adapter_locked(write_result);
-      return make_runner_result(write_result.status == AdapterCallStatus::kDegraded
-                                    ? RunnerCallStatus::kDegraded
-                                    : RunnerCallStatus::kOk,
-                                "active command written", status_.latched_fault);
+      return make_runner_result(status_.degraded ? RunnerCallStatus::kDegraded
+                                                 : RunnerCallStatus::kOk,
+                                "active command already written",
+                                status_.latched_fault);
     }
 
     if (!issue_startup_idle) {
@@ -796,12 +753,10 @@ class BridgeRunner::Impl {
 
   [[nodiscard]] RunnerCallResult apply_startup_idle_policy() {
     StartupIdlePolicy policy;
-    bool safe_supported;
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
       policy = config_.startup_idle_policy;
-      safe_supported = cached_safe_command_supported_;
     }
 
     if (policy == StartupIdlePolicy::kNoCommandWrite) {
@@ -812,34 +767,12 @@ class BridgeRunner::Impl {
                                 status_.latched_fault);
     }
 
-    if (safe_supported) {
-      AdapterCallResult safe_result = dependencies_.adapter->write_safe_command();
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!safe_result.succeeded()) {
-        return handle_adapter_failure_locked(
-            safe_result, FaultCategory::kSafety,
-            "startup safe command write failed", true);
-      }
-      status_.startup_idle_active = true;
-      update_degraded_from_adapter_locked(safe_result);
-      return make_runner_result(safe_result.status == AdapterCallStatus::kDegraded
-                                    ? RunnerCallStatus::kDegraded
-                                    : RunnerCallStatus::kOk,
-                                "startup safe idle command written",
-                                status_.latched_fault);
-    }
-
     std::lock_guard<std::mutex> lock(mutex_);
-    if (policy == StartupIdlePolicy::kRequireSafeCommand) {
-      const BridgeFault fault = make_fault(
-          FaultCategory::kSafety, FaultSeverity::kFatal, status_.lifecycle_state,
-          "startup idle requires safe command support", status_.last_cycle_time_ns);
-      return latch_fault_locked(fault, true, RunnerCallStatus::kFatalError);
-    }
-
     status_.startup_idle_active = true;
     return make_runner_result(RunnerCallStatus::kOk,
-                              "startup idle running without safe command support",
+                              policy == StartupIdlePolicy::kRequireSafeCommand
+                                  ? "startup idle safe command disabled"
+                                  : "startup idle running without safe command support",
                               status_.latched_fault);
   }
 
@@ -898,8 +831,6 @@ class BridgeRunner::Impl {
   std::optional<CommandFrame> latest_command_;
   std::optional<CachedGamepadSample> latest_gamepad_sample_;
   std::uint64_t fault_sequence_{0};
-  bool cached_safe_command_supported_{false};
-  bool fault_safe_command_written_{false};
   bool gamepad_remote_started_{false};
   std::atomic_bool gamepad_stop_requested_{false};
   std::thread gamepad_thread_;

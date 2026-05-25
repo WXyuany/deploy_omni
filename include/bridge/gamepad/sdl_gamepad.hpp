@@ -56,6 +56,9 @@ struct SdlGamepadStartResult {
 void convert_sdl_snapshot_to_common_gamepad(const SdlGamepadSnapshot& snapshot,
                                             CommonGamepad& gamepad) noexcept;
 
+[[nodiscard]] std::string format_sdl_gamepad_debug_line(
+    const SdlGamepadSnapshot& snapshot, const CommonGamepad& gamepad);
+
 class SdlGamepadRemote {
  public:
   explicit SdlGamepadRemote(SdlGamepadRemoteOptions options);

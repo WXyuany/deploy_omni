@@ -167,20 +167,12 @@ void print_command_info(const bridge::core::CommandFrame& command,
 }  // namespace
 
 UnitreeG1LowLevelSession::UnitreeG1LowLevelSession(LowLevelSessionConfig config)
-    : config_(std::move(config)),
-      position_(config_.hardware_slot_count, 0.0),
-      velocity_(config_.hardware_slot_count, 0.0),
-      effort_(config_.hardware_slot_count, 0.0),
-      acceleration_(config_.hardware_slot_count, 0.0) {}
+    : config_(std::move(config)) {}
 
 UnitreeG1LowLevelSession::~UnitreeG1LowLevelSession() {
   stop_reader_ = true;
   if (reader_thread_.joinable()) {
     reader_thread_.join();
-  }
-  stop_writer_ = true;
-  if (writer_thread_.joinable()) {
-    writer_thread_.join();
   }
 }
 
@@ -194,10 +186,11 @@ UnitreeG1LowLevelSession::last_packed_command() const noexcept {
 }
 
 bridge::core::AdapterCallResult UnitreeG1LowLevelSession::initialize() {
-  synthetic_time_ns_ += tick_or_default(config_.initialize_timeout_ns);
-  initialized_ = true;
+  state_time_ns_ += tick_or_default(config_.initialize_timeout_ns);
+  command_time_ns_ = state_time_ns_;
+  initialized_.store(true);
   connection_alive_ = true;
-  released_motion_ = !config_.require_motion_release;
+  released_motion_.store(!config_.require_motion_release);
 
   auto check_mode = [this](std::string& form, std::string& name) -> int32_t {
     if (config_.check_mode_hook) {
@@ -261,22 +254,22 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::initialize() {
 
       const int32_t release_result = release_mode();
       if (release_result != 0) {
-        initialized_ = false;
+        initialized_.store(false);
         connection_alive_ = false;
         return motion_release_failure(
             "g1 low-level motion release prerequisite not satisfied",
-            synthetic_time_ns_);
+            state_time_ns_);
       }
     }
 
     if (!released) {
-      initialized_ = false;
+      initialized_.store(false);
       connection_alive_ = false;
       return motion_release_failure(
           "g1 low-level motion mode remained active after release attempts",
-          synthetic_time_ns_);
+          state_time_ns_);
     }
-    released_motion_ = true;
+    released_motion_.store(true);
   }
 
   stop_reader_ = false;
@@ -307,7 +300,7 @@ void UnitreeG1LowLevelSession::handle_imu_message(const void* message) {
 
 LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
   LowLevelSessionReadResult result;
-  if (!initialized_) {
+  if (!initialized_.load()) {
     result.result = {
         .status = bridge::core::AdapterCallStatus::kRetryableError,
         .detail = "g1 low-level session must be initialized before read",
@@ -315,7 +308,7 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
                             bridge::core::FaultSeverity::kRecoverable,
                             bridge::core::LifecycleState::kCreated,
                             "g1 low-level session must be initialized before read",
-                            0, synthetic_time_ns_),
+                            0, state_time_ns_),
     };
     return result;
   }
@@ -327,7 +320,16 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
     buffered_state_.reset();
   }
 
-  if (!state.has_value() && !latest_low_state_.has_value()) {
+  auto latest_low_state = [this]() -> std::optional<unitree_hg::msg::dds_::LowState_> {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return latest_low_state_;
+  };
+  auto latest_imu_state = [this]() -> std::optional<unitree_hg::msg::dds_::IMUState_> {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return latest_imu_state_;
+  };
+
+  if (!state.has_value() && !latest_low_state().has_value()) {
     for (std::uint32_t attempt = 0; attempt < config_.read_retry_attempts;
          ++attempt) {
       if (config_.read_retry_interval_ns > 0) {
@@ -339,17 +341,18 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
         state = std::move(buffered_state_);
         buffered_state_.reset();
       }
-      if (state.has_value() || latest_low_state_.has_value()) {
+      if (state.has_value() || latest_low_state().has_value()) {
         break;
       }
     }
   }
 
   if (!state.has_value()) {
-    synthetic_time_ns_ += tick_or_default(config_.read_timeout_ns);
-    last_read_time_ns_ = synthetic_time_ns_;
+    state_time_ns_ += tick_or_default(config_.read_timeout_ns);
+    last_read_time_ns_ = state_time_ns_;
 
-    if (!latest_low_state_.has_value()) {
+    const std::optional<unitree_hg::msg::dds_::LowState_> low_state = latest_low_state();
+    if (!low_state.has_value()) {
       result.result = {
           .status = bridge::core::AdapterCallStatus::kRetryableError,
           .detail = "g1 low-level state not yet available after read retries",
@@ -357,17 +360,17 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
                               bridge::core::FaultSeverity::kRecoverable,
                               bridge::core::LifecycleState::kWaitingForState,
                               "g1 low-level state not yet available after read retries", 0,
-                              synthetic_time_ns_),
+                              state_time_ns_),
       };
       return result;
     }
 
     LowLevelSessionState fallback = make_session_state_from_low_state(
-        *latest_low_state_, latest_imu_state_, config_.hardware_slot_count,
-        synthetic_time_ns_);
+        *low_state, latest_imu_state(), config_.hardware_slot_count,
+        state_time_ns_);
 
     if (config_.stale_state_after_ns > 0 &&
-        synthetic_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&
+        state_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&
         last_low_state_time_ns_ != 0) {
       fallback.stale = true;
       fallback.degraded = true;
@@ -375,18 +378,14 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
                                   bridge::core::FaultSeverity::kRecoverable,
                                   bridge::core::LifecycleState::kActive,
                                   "g1 low-level state is stale", 0,
-                                  synthetic_time_ns_);
+                                  state_time_ns_);
     }
 
     state = std::move(fallback);
   }
 
-  mode_pr_ = state->mode_pr;
-  mode_machine_ = state->mode_machine;
-  position_ = state->position;
-  velocity_ = state->velocity;
-  effort_ = state->effort;
-  acceleration_ = state->acceleration;
+  mode_pr_.store(state->mode_pr);
+  mode_machine_.store(state->mode_machine);
 
   result.state = std::move(state);
   result.result = result.state->degraded
@@ -408,20 +407,25 @@ void UnitreeG1LowLevelSession::handle_low_state_message(
   if (config_.verify_low_state_crc && !validate_low_state_crc(state)) {
     return;
   }
-  latest_low_state_ = state;
-  last_low_state_time_ns_ = synthetic_time_ns_;
-  mode_pr_ = state.mode_pr();
-  mode_machine_ = state.mode_machine();
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    latest_low_state_ = state;
+    last_low_state_time_ns_ = state_time_ns_;
+  }
+  mode_pr_.store(state.mode_pr());
+  mode_machine_.store(state.mode_machine());
 }
 
 void UnitreeG1LowLevelSession::handle_imu_message(
     const ::unitree_hg::msg::dds_::IMUState_& imu) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
   latest_imu_state_ = imu;
 }
 
 bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
     const bridge::core::CommandFrame& command) {
-  if (!initialized_) {
+  std::lock_guard<std::mutex> lock(command_mutex_);
+  if (!initialized_.load()) {
     return {
         .status = bridge::core::AdapterCallStatus::kRetryableError,
         .detail = "g1 low-level session must be initialized before write",
@@ -429,7 +433,7 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
                             bridge::core::FaultSeverity::kRecoverable,
                             bridge::core::LifecycleState::kCreated,
                             "g1 low-level session must be initialized before write",
-                            command.sequence, synthetic_time_ns_),
+                            command.sequence, command_time_ns_),
     };
   }
   // if (!released_motion_) {
@@ -444,50 +448,34 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
   //   };
   // }
 
-  synthetic_time_ns_ += tick_or_default(config_.write_timeout_ns);
-  last_write_time_ns_ = synthetic_time_ns_;
-  mode_pr_ = command.mode_pr;
+  command_time_ns_ += tick_or_default(config_.write_timeout_ns);
+  last_write_time_ns_ = command_time_ns_;
+  mode_pr_.store(command.mode_pr);
   const std::uint8_t effective_mode_machine = command.mode_machine;
-  mode_machine_ = effective_mode_machine;
+  mode_machine_.store(effective_mode_machine);
   const auto now = std::chrono::steady_clock::now();
   if (last_command_print_time_ == std::chrono::steady_clock::time_point{} ||
       now - last_command_print_time_ >= std::chrono::seconds(1)) {
     print_command_info(command, effective_mode_machine, config_.hardware_slot_count);
     last_command_print_time_ = now;
   }
-  if (!command.joints.position.empty()) {
-    position_ = command.joints.position;
-  }
-  if (!command.joints.velocity.empty()) {
-    velocity_ = command.joints.velocity;
-  }
-  if (!command.joints.effort.empty()) {
-    effort_ = command.joints.effort;
-  }
-  acceleration_.assign(position_.size(), 0.0);
   last_packed_command_ = build_low_cmd_from_command(command, config_.hardware_slot_count,
                                                     effective_mode_machine);
 
   if (lowcmd_publisher_ && last_packed_command_.has_value()) {
-    {
-      std::lock_guard<std::mutex> lock(cmd_mutex_);
-      pending_cmd_ = *last_packed_command_;
-    }
-    if (!writer_started_.exchange(true)) {
-      stop_writer_ = false;
-      writer_thread_ = std::thread(&UnitreeG1LowLevelSession::writer_loop, this);
-    }
+    connection_alive_ = lowcmd_publisher_->Write(*last_packed_command_);
   }
 
   return {
       .status = bridge::core::AdapterCallStatus::kOk,
-      .detail = "g1 low-level command buffered for writer thread",
+      .detail = "g1 low-level command written",
       .fault = std::nullopt,
   };
 }
 
 bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_safe_command() {
-  if (!initialized_) {
+  std::lock_guard<std::mutex> lock(command_mutex_);
+  if (!initialized_.load()) {
     return {
         .status = bridge::core::AdapterCallStatus::kRetryableError,
         .detail = "g1 low-level session must be initialized before safe command",
@@ -495,86 +483,85 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_safe_command() {
                             bridge::core::FaultSeverity::kRecoverable,
                             bridge::core::LifecycleState::kCreated,
                             "g1 low-level session must be initialized before safe command",
-                            0, synthetic_time_ns_),
+                            0, command_time_ns_),
     };
   }
 
-  synthetic_time_ns_ += tick_or_default(config_.write_timeout_ns);
-  last_write_time_ns_ = synthetic_time_ns_;
-  mode_pr_ = 0;
-  effort_.assign(effort_.size(), 0.0);
-  velocity_.assign(velocity_.size(), 0.0);
-  acceleration_.assign(acceleration_.size(), 0.0);
-  last_packed_command_ = build_safe_low_cmd(config_.hardware_slot_count, mode_machine_);
+  command_time_ns_ += tick_or_default(config_.write_timeout_ns);
+  last_write_time_ns_ = command_time_ns_;
+  mode_pr_.store(0);
+  last_packed_command_ = build_safe_low_cmd(config_.hardware_slot_count, mode_machine_.load());
 
   if (lowcmd_publisher_ && last_packed_command_.has_value()) {
-    {
-      std::lock_guard<std::mutex> lock(cmd_mutex_);
-      pending_cmd_ = *last_packed_command_;
-    }
-    if (!writer_started_.exchange(true)) {
-      stop_writer_ = false;
-      writer_thread_ = std::thread(&UnitreeG1LowLevelSession::writer_loop, this);
-    }
+    connection_alive_ = lowcmd_publisher_->Write(*last_packed_command_);
   }
 
   return {
       .status = bridge::core::AdapterCallStatus::kOk,
-      .detail = "g1 low-level safe command buffered for writer thread",
+      .detail = "g1 low-level safe command written",
       .fault = std::nullopt,
   };
 }
 
-void UnitreeG1LowLevelSession::writer_loop() {
-  while (!stop_writer_) {
-    std::optional<unitree_hg::msg::dds_::LowCmd_> cmd;
-    {
-      std::lock_guard<std::mutex> lock(cmd_mutex_);
-      cmd = pending_cmd_;
-    }
-    if (cmd.has_value() && lowcmd_publisher_) {
-      connection_alive_ = lowcmd_publisher_->Write(*cmd);
-    }
-    std::this_thread::sleep_for(std::chrono::microseconds(2000));
-  }
-}
-
 void UnitreeG1LowLevelSession::reader_loop() {
   while (!stop_reader_) {
-    if (!latest_low_state_.has_value()) {
-      std::this_thread::sleep_for(std::chrono::microseconds(1000));
-      continue;
+    std::optional<unitree_hg::msg::dds_::LowState_> latest_low_state;
+    std::optional<unitree_hg::msg::dds_::IMUState_> latest_imu_state;
+    std::uint64_t last_low_state_time_ns = 0;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      latest_low_state = latest_low_state_;
+      latest_imu_state = latest_imu_state_;
+      last_low_state_time_ns = last_low_state_time_ns_;
     }
+    if (!latest_low_state.has_value()) {
+       std::this_thread::sleep_for(std::chrono::microseconds(1000));
+       continue;
+     }
 
     LowLevelSessionState state = make_session_state_from_low_state(
-        *latest_low_state_, latest_imu_state_, config_.hardware_slot_count,
-        synthetic_time_ns_);
+        *latest_low_state, latest_imu_state, config_.hardware_slot_count,
+        state_time_ns_);
 
     if (config_.stale_state_after_ns > 0 &&
-        synthetic_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&
-        last_low_state_time_ns_ != 0) {
+        state_time_ns_ > last_low_state_time_ns + config_.stale_state_after_ns &&
+        last_low_state_time_ns != 0) {
       state.stale = true;
       state.degraded = true;
       state.fault = make_fault(bridge::core::FaultCategory::kAdapterHealth,
                                bridge::core::FaultSeverity::kRecoverable,
                                bridge::core::LifecycleState::kActive,
                                "g1 low-level state is stale", 0,
-                               synthetic_time_ns_);
+                               state_time_ns_);
     }
 
     {
       std::lock_guard<std::mutex> lock(state_buffer_mutex_);
       buffered_state_ = std::move(state);
     }
-    has_state_ = true;
+    has_state_.store(true);
 
     std::this_thread::sleep_for(std::chrono::microseconds(2000));
   }
 }
 
 bridge::core::AdapterHealth UnitreeG1LowLevelSession::health() const {
-  const bool stale = config_.stale_state_after_ns > 0 && last_low_state_time_ns_ != 0 &&
-                     synthetic_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns;
+  std::uint64_t state_time_ns = 0;
+  std::uint64_t last_low_state_time_ns = 0;
+  std::uint64_t last_read_time_ns = 0;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    state_time_ns = state_time_ns_;
+    last_low_state_time_ns = last_low_state_time_ns_;
+    last_read_time_ns = last_read_time_ns_;
+  }
+  std::uint64_t last_write_time_ns = 0;
+  {
+    std::lock_guard<std::mutex> lock(command_mutex_);
+    last_write_time_ns = last_write_time_ns_;
+  }
+  const bool stale = config_.stale_state_after_ns > 0 && last_low_state_time_ns != 0 &&
+                     state_time_ns > last_low_state_time_ns + config_.stale_state_after_ns;
   return {
       .state = !connection_alive_ ? bridge::core::HealthState::kUnknown
                                   : stale ? bridge::core::HealthState::kDegraded
@@ -582,29 +569,19 @@ bridge::core::AdapterHealth UnitreeG1LowLevelSession::health() const {
       .safe_command_supported = true,
       .connection_alive = connection_alive_,
       .degraded = stale,
-      .last_read_time_ns = last_read_time_ns_,
-      .last_write_time_ns = last_write_time_ns_,
+      .last_read_time_ns = last_read_time_ns,
+      .last_write_time_ns = last_write_time_ns,
       .fault = stale
                    ? std::optional<bridge::core::BridgeFault>(make_fault(
                          bridge::core::FaultCategory::kAdapterHealth,
                          bridge::core::FaultSeverity::kRecoverable,
                          bridge::core::LifecycleState::kActive,
-                         "g1 low-level state is stale", 0, synthetic_time_ns_))
+                          "g1 low-level state is stale", 0, state_time_ns))
                    : std::nullopt,
   };
 }
 
 bridge::core::AdapterCallResult UnitreeG1LowLevelSession::shutdown() {
-  stop_writer_ = true;
-  if (writer_thread_.joinable()) {
-    writer_thread_.join();
-  }
-  writer_started_ = false;
-  {
-    std::lock_guard<std::mutex> lock(cmd_mutex_);
-    pending_cmd_.reset();
-  }
-
   stop_reader_ = true;
   if (reader_thread_.joinable()) {
     reader_thread_.join();
@@ -613,13 +590,19 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::shutdown() {
     std::lock_guard<std::mutex> lock(state_buffer_mutex_);
     buffered_state_.reset();
   }
-  initialized_ = false;
+  initialized_.store(false);
   connection_alive_ = false;
-  has_state_ = false;
-  last_packed_command_.reset();
-  latest_low_state_.reset();
-  latest_imu_state_.reset();
-  last_low_state_time_ns_ = 0;
+  has_state_.store(false);
+  {
+    std::lock_guard<std::mutex> lock(command_mutex_);
+    last_packed_command_.reset();
+  }
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    latest_low_state_.reset();
+    latest_imu_state_.reset();
+    last_low_state_time_ns_ = 0;
+  }
   if (imu_subscriber_) {
     imu_subscriber_->CloseChannel();
     imu_subscriber_.reset();

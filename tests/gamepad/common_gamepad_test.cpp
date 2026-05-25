@@ -130,6 +130,29 @@ void TestCompressionUsesWirelessRemoteCodecLayout() {
   assert(ReadU32(first, 36U) == 0U);
 }
 
+void TestCompressionTreatsAliasesAsCanonicalButtons() {
+  bridge::gamepad::CommonGamepad alias_gamepad;
+  alias_gamepad.RB.update(true);
+  alias_gamepad.LB.update(true);
+  alias_gamepad.RT.update(true);
+  alias_gamepad.LT.update(true);
+  alias_gamepad.back.update(true);
+
+  bridge::gamepad::CommonGamepad canonical_gamepad;
+  canonical_gamepad.R1.update(true);
+  canonical_gamepad.L1.update(true);
+  canonical_gamepad.R2.update(true);
+  canonical_gamepad.L2.update(true);
+  canonical_gamepad.select.update(true);
+
+  const std::array<std::uint8_t, 40> alias_encoded =
+      bridge::gamepad::compress_to_wireless_remote(alias_gamepad);
+  const std::array<std::uint8_t, 40> canonical_encoded =
+      bridge::gamepad::compress_to_wireless_remote(canonical_gamepad);
+
+  assert(alias_encoded == canonical_encoded);
+}
+
 }  // namespace
 
 int main() {
@@ -137,5 +160,6 @@ int main() {
   TestFilterAndDeadZone();
   TestForceZeroClearsAxes();
   TestCompressionUsesWirelessRemoteCodecLayout();
+  TestCompressionTreatsAliasesAsCanonicalButtons();
   return 0;
 }

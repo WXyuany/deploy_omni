@@ -35,6 +35,25 @@ void TestSnapshotConversion() {
   assert(gamepad.lx > 0.07F);
 }
 
+void TestDebugLineShowsSdlAndCommonValues() {
+  bridge::gamepad::SdlGamepadSnapshot snapshot;
+  snapshot.axes[bridge::gamepad::SdlGamepadAxis::kLeftX] = 16384;
+  snapshot.axes[bridge::gamepad::SdlGamepadAxis::kLeftY] = -32768;
+  snapshot.buttons[bridge::gamepad::SdlGamepadButton::kA] = true;
+  snapshot.buttons[bridge::gamepad::SdlGamepadButton::kStart] = true;
+
+  bridge::gamepad::CommonGamepad gamepad;
+  bridge::gamepad::convert_sdl_snapshot_to_common_gamepad(snapshot, gamepad);
+
+  const std::string line =
+      bridge::gamepad::format_sdl_gamepad_debug_line(snapshot, gamepad);
+  assert(line.find("[SdlGamepadRemote.read]") != std::string::npos);
+  assert(line.find("raw_axes={lx=16384") != std::string::npos);
+  assert(line.find("common_axes={lx=") != std::string::npos);
+  assert(line.find("buttons={A=1") != std::string::npos);
+  assert(line.find("start=1") != std::string::npos);
+}
+
 void TestUnavailableReaderReturnsNoSnapshot() {
   bridge::gamepad::SdlGamepadRemote remote({.controller_index = 9999});
   const auto start = remote.start();
@@ -47,6 +66,7 @@ void TestUnavailableReaderReturnsNoSnapshot() {
 
 int main() {
   TestSnapshotConversion();
+  TestDebugLineShowsSdlAndCommonValues();
   TestUnavailableReaderReturnsNoSnapshot();
   return 0;
 }

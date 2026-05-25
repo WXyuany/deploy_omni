@@ -17,9 +17,19 @@
 
 namespace {
 
+constexpr auto kPrintInterval = std::chrono::milliseconds(20);
+constexpr std::uint64_t kRateWindowNs = 1'000'000'000ULL;
+
 std::atomic<bool> g_stop{false};
 
 void handle_signal(int) { g_stop.store(true); }
+
+[[nodiscard]] std::uint64_t monotonic_now_ns() {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
 [[nodiscard]] bool init_channel_factory(
     const bridge::config::BridgeStartupConfig& config) {
@@ -44,6 +54,7 @@ int main(int argc, char** argv) {
   if (argc > 1 && std::string(argv[1]) == "--help") {
     std::printf("Usage: %s [config-path]\n", argv[0]);
     std::printf("Receives external robot state from dds.topics.state in config.\n");
+    std::printf("Prints the latest state at 50 Hz.\n");
     return 0;
   }
 
@@ -88,24 +99,34 @@ int main(int argc, char** argv) {
                loaded.config->adapter.connection.interface_hint.c_str());
 
   std::uint64_t last_count = 0;
+  std::uint64_t displayed_rate = 0;
+  std::uint64_t window_start_ns = monotonic_now_ns();
+  std::uint64_t last_gamepad_print_ns = window_start_ns;
   bridge::adapters::unitree_g1::G1Gamepad gamepad;
   while (!g_stop.load()) {
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(kPrintInterval);
     std::lock_guard<std::mutex> lock(mutex);
-    const std::uint64_t delta = received_count - last_count;
-    last_count = received_count;
+    const std::uint64_t now_ns = monotonic_now_ns();
+    if (now_ns - window_start_ns >= kRateWindowNs) {
+      displayed_rate = received_count - last_count;
+      last_count = received_count;
+      window_start_ns = now_ns;
+    }
     std::fprintf(stderr,
                  "received=%llu/s total=%llu mode_pr=%u mode_machine=%u q0=%.4f dq0=%.4f rpy=(%.3f, %.3f, %.3f)\n",
-                 static_cast<unsigned long long>(delta),
+                 static_cast<unsigned long long>(displayed_rate),
                  static_cast<unsigned long long>(received_count), latest.mode_pr(),
                   latest.mode_machine(), latest.motor_state().at(0).q(),
                   latest.motor_state().at(0).dq(), latest.imu_state().rpy()[0],
                   latest.imu_state().rpy()[1], latest.imu_state().rpy()[2]);
-    bridge::adapters::unitree_g1::update_gamepad_from_wireless_remote(
-        gamepad, latest.wireless_remote());
-    const std::string gamepad_status =
-        bridge::adapters::unitree_g1::format_gamepad_status(gamepad);
-    std::fprintf(stderr, "%s\n", gamepad_status.c_str());
+    if (now_ns - last_gamepad_print_ns >= kRateWindowNs) {
+      bridge::adapters::unitree_g1::update_gamepad_from_wireless_remote(
+          gamepad, latest.wireless_remote());
+      const std::string gamepad_status =
+          bridge::adapters::unitree_g1::format_gamepad_status(gamepad);
+      std::fprintf(stderr, "%s\n", gamepad_status.c_str());
+      last_gamepad_print_ns = now_ns;
+    }
   }
 
   subscriber->CloseChannel();

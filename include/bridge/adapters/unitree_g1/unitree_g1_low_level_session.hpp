@@ -97,13 +97,14 @@ class UnitreeG1LowLevelSession {
 
  private:
   LowLevelSessionConfig config_;
-  std::uint64_t synthetic_time_ns_{0};
-  bool initialized_{false};
-  bool released_motion_{false};
-  bool has_state_{false};
+  std::uint64_t state_time_ns_{0};
+  std::uint64_t command_time_ns_{0};
+  std::atomic<bool> initialized_{false};
+  std::atomic<bool> released_motion_{false};
+  std::atomic<bool> has_state_{false};
   std::atomic<bool> connection_alive_{false};
-  std::uint8_t mode_pr_{0};
-  std::uint8_t mode_machine_{0};
+  std::atomic<std::uint8_t> mode_pr_{0};
+  std::atomic<std::uint8_t> mode_machine_{0};
   std::uint64_t last_low_state_time_ns_{0};
   std::uint64_t last_read_time_ns_{0};
   std::uint64_t last_write_time_ns_{0};
@@ -119,23 +120,13 @@ class UnitreeG1LowLevelSession {
       imu_subscriber_;
   std::shared_ptr<unitree::robot::b2::MotionSwitcherClient> motion_switcher_client_;
 
-  void writer_loop();
-  std::thread writer_thread_;
-  std::atomic<bool> stop_writer_{false};
-  std::atomic<bool> writer_started_{false};
-  std::mutex cmd_mutex_;
-  std::optional<unitree_hg::msg::dds_::LowCmd_> pending_cmd_;
-
   void reader_loop();
   std::thread reader_thread_;
   std::atomic<bool> stop_reader_{false};
+  mutable std::mutex command_mutex_;
+  mutable std::mutex state_mutex_;
   std::mutex state_buffer_mutex_;
   std::optional<LowLevelSessionState> buffered_state_;
-
-  std::vector<double> position_;
-  std::vector<double> velocity_;
-  std::vector<double> effort_;
-  std::vector<double> acceleration_;
 };
 
 }  // namespace bridge::adapters::unitree_g1

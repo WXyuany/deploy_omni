@@ -1,5 +1,6 @@
 #include "../../../../include/bridge/adapters/unitree_g1/unitree_g1_adapter.hpp"
 
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <unordered_set>
@@ -62,43 +63,41 @@ class UnitreeG1Adapter::Impl {
   }
 
   [[nodiscard]] bridge::core::AdapterCallResult initialize() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (initialized_) {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (initialized_.load()) {
       return {.status = bridge::core::AdapterCallStatus::kOk,
               .detail = "unitree_g1 adapter already initialized",
               .fault = std::nullopt};
     }
 
     if (const auto validation = validate_config_locked(); !validation.succeeded()) {
-      lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
+      lifecycle_state_.store(bridge::core::LifecycleState::kFaulted);
       return validation;
     }
 
-    lifecycle_state_ = bridge::core::LifecycleState::kInitializing;
+    lifecycle_state_.store(bridge::core::LifecycleState::kInitializing);
     const auto init = session_.initialize();
     if (!init.succeeded()) {
-      lifecycle_state_ = bridge::core::LifecycleState::kFaulted;
+      lifecycle_state_.store(bridge::core::LifecycleState::kFaulted);
       return init;
     }
 
-    initialized_ = true;
-    lifecycle_state_ = bridge::core::LifecycleState::kWaitingForState;
+    initialized_.store(true);
+    lifecycle_state_.store(bridge::core::LifecycleState::kWaitingForState);
     return {.status = bridge::core::AdapterCallStatus::kOk,
             .detail = "unitree_g1 adapter initialized",
             .fault = std::nullopt};
   }
 
   [[nodiscard]] bridge::core::AdapterReadResult read_state() {
-    std::lock_guard<std::mutex> lock(mutex_);
-
     bridge::core::AdapterReadResult result;
-    if (!initialized_) {
+    if (!initialized_.load()) {
       result.result = {
           .status = bridge::core::AdapterCallStatus::kRetryableError,
           .detail = "unitree_g1 adapter must be initialized before read",
           .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
                               bridge::core::FaultSeverity::kRecoverable,
-                              lifecycle_state_,
+                              lifecycle_state_.load(),
                               "unitree_g1 adapter must be initialized before read",
                               0, 0),
       };
@@ -111,8 +110,8 @@ class UnitreeG1Adapter::Impl {
       return result;
     }
 
-    has_read_state_ = true;
-    lifecycle_state_ = bridge::core::LifecycleState::kActive;
+    has_read_state_.store(true);
+    lifecycle_state_.store(bridge::core::LifecycleState::kActive);
 
     bridge::core::StateFrame state;
     state.sequence = ++state_sequence_;
@@ -123,9 +122,12 @@ class UnitreeG1Adapter::Impl {
     state.low_state_reserve = session_read.state->low_state_reserve;
     state.mode_pr = session_read.state->mode_pr;
     state.mode_machine = session_read.state->mode_machine;
-    state.lifecycle_state = lifecycle_state_;
-    state.active_mode = last_mode_;
-    state.mode_label = last_mode_label_;
+    state.lifecycle_state = lifecycle_state_.load();
+    {
+      std::lock_guard<std::mutex> lock(command_state_mutex_);
+      state.active_mode = last_mode_;
+      state.mode_label = last_mode_label_;
+    }
     state.valid = session_read.state->valid;
     state.stale = session_read.state->stale;
     state.degraded = session_read.state->degraded;
@@ -155,15 +157,13 @@ class UnitreeG1Adapter::Impl {
 
   [[nodiscard]] bridge::core::AdapterCallResult write_command(
       const bridge::core::CommandFrame& command) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    if (!initialized_) {
+    if (!initialized_.load()) {
       return {
           .status = bridge::core::AdapterCallStatus::kRetryableError,
           .detail = "unitree_g1 adapter must be initialized before command write",
           .fault = make_fault(bridge::core::FaultCategory::kAdapterWrite,
                               bridge::core::FaultSeverity::kRecoverable,
-                              lifecycle_state_,
+                              lifecycle_state_.load(),
                               "unitree_g1 adapter must be initialized before command write",
                               command.sequence, 0),
       };
@@ -174,7 +174,7 @@ class UnitreeG1Adapter::Impl {
           .detail = "command frame is marked invalid",
           .fault = make_fault(bridge::core::FaultCategory::kInvalidCommand,
                               bridge::core::FaultSeverity::kRecoverable,
-                              lifecycle_state_, "command frame is marked invalid",
+                              lifecycle_state_.load(), "command frame is marked invalid",
                               command.sequence, command.receive_time_ns),
       };
     }
@@ -184,7 +184,7 @@ class UnitreeG1Adapter::Impl {
           .detail = "command frame is marked stale",
           .fault = make_fault(bridge::core::FaultCategory::kCommandStale,
                               bridge::core::FaultSeverity::kRecoverable,
-                              lifecycle_state_, "command frame is marked stale",
+                              lifecycle_state_.load(), "command frame is marked stale",
                               command.sequence, command.receive_time_ns),
       };
     }
@@ -194,43 +194,47 @@ class UnitreeG1Adapter::Impl {
           .detail = "command joint vectors must either be empty or match G1 joint_count",
           .fault = make_fault(bridge::core::FaultCategory::kInvalidCommand,
                               bridge::core::FaultSeverity::kRecoverable,
-                              lifecycle_state_,
+                              lifecycle_state_.load(),
                               "command joint vectors must either be empty or match G1 joint_count",
                               command.sequence, command.receive_time_ns),
       };
     }
-    if (config_.safety.require_initial_state_before_motion && !has_read_state_ &&
+    if (config_.safety.require_initial_state_before_motion && !has_read_state_.load() &&
         command.mode != bridge::core::ControlMode::kSafeIdle) {
       return {
           .status = bridge::core::AdapterCallStatus::kRetryableError,
           .detail = "initial state read is required before motion commands",
           .fault = make_fault(bridge::core::FaultCategory::kSafety,
                               bridge::core::FaultSeverity::kRecoverable,
-                              lifecycle_state_,
+                              lifecycle_state_.load(),
                               "initial state read is required before motion commands",
                               command.sequence, command.receive_time_ns),
       };
     }
 
-    last_mode_ = command.mode;
-    last_mode_label_ = command.mode_label;
+    {
+      std::lock_guard<std::mutex> lock(command_state_mutex_);
+      last_mode_ = command.mode;
+      last_mode_label_ = command.mode_label;
+    }
     return session_.write_command(command);
   }
 
   [[nodiscard]] bridge::core::AdapterCallResult write_safe_command() {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!config_.safety.safe_command_supported) {
       return {.status = bridge::core::AdapterCallStatus::kUnsupported,
               .detail = "safe command is disabled by adapter config",
               .fault = std::nullopt};
     }
-    last_mode_ = bridge::core::ControlMode::kSafeIdle;
-    last_mode_label_ = "safe_idle";
+    {
+      std::lock_guard<std::mutex> lock(command_state_mutex_);
+      last_mode_ = bridge::core::ControlMode::kSafeIdle;
+      last_mode_label_ = "safe_idle";
+    }
     return session_.write_safe_command();
   }
 
   [[nodiscard]] bridge::core::AdapterHealthResult query_health() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     bridge::core::AdapterHealthResult result;
     result.health = session_.health();
     result.health.safe_command_supported = config_.safety.safe_command_supported;
@@ -241,26 +245,18 @@ class UnitreeG1Adapter::Impl {
   }
 
   [[nodiscard]] bridge::core::AdapterCallResult shutdown() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!initialized_) {
-      lifecycle_state_ = bridge::core::LifecycleState::kStopped;
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (!initialized_.load()) {
+      lifecycle_state_.store(bridge::core::LifecycleState::kStopped);
       return {.status = bridge::core::AdapterCallStatus::kOk,
               .detail = "unitree_g1 adapter already stopped",
               .fault = std::nullopt};
     }
-    lifecycle_state_ = bridge::core::LifecycleState::kStopping;
-    const auto safe = config_.safety.safe_command_supported
-                          ? session_.write_safe_command()
-                          : bridge::core::AdapterCallResult{.status = bridge::core::AdapterCallStatus::kUnsupported,
-                                                            .detail = "safe command disabled",
-                                                            .fault = std::nullopt};
+    lifecycle_state_.store(bridge::core::LifecycleState::kStopping);
     const auto shutdown = session_.shutdown();
-    initialized_ = false;
-    has_read_state_ = false;
-    lifecycle_state_ = bridge::core::LifecycleState::kStopped;
-    if (config_.safety.safe_command_supported && !safe.succeeded()) {
-      return safe;
-    }
+    initialized_.store(false);
+    has_read_state_.store(false);
+    lifecycle_state_.store(bridge::core::LifecycleState::kStopped);
     return shutdown;
   }
 
@@ -307,11 +303,12 @@ class UnitreeG1Adapter::Impl {
 
   UnitreeG1AdapterConfig config_;
   UnitreeG1LowLevelSession session_;
-  mutable std::mutex mutex_;
-  bool initialized_{false};
-  bool has_read_state_{false};
+  mutable std::mutex lifecycle_mutex_;
+  mutable std::mutex command_state_mutex_;
+  std::atomic<bool> initialized_{false};
+  std::atomic<bool> has_read_state_{false};
   std::uint64_t state_sequence_{0};
-  bridge::core::LifecycleState lifecycle_state_{bridge::core::LifecycleState::kCreated};
+  std::atomic<bridge::core::LifecycleState> lifecycle_state_{bridge::core::LifecycleState::kCreated};
   bridge::core::ControlMode last_mode_{bridge::core::ControlMode::kUnknown};
   std::string last_mode_label_;
 };

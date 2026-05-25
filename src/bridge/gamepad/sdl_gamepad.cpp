@@ -3,6 +3,8 @@
 #include <SDL2/SDL.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <sstream>
 
 namespace bridge::gamepad {
 namespace {
@@ -58,6 +60,37 @@ void convert_sdl_snapshot_to_common_gamepad(const SdlGamepadSnapshot& snapshot,
   gamepad.right.update(Button(snapshot, kDpadRight));
 
   gamepad.update_filter();
+}
+
+std::string format_sdl_gamepad_debug_line(const SdlGamepadSnapshot& snapshot,
+                                          const CommonGamepad& gamepad) {
+  std::ostringstream out;
+  out << "[SdlGamepadRemote.read] raw_axes={"
+      << "lx=" << snapshot.axes[kLeftX]
+      << " ly=" << snapshot.axes[kLeftY]
+      << " rx=" << snapshot.axes[kRightX]
+      << " ry=" << snapshot.axes[kRightY]
+      << " lt=" << snapshot.axes[kTriggerLeft]
+      << " rt=" << snapshot.axes[kTriggerRight] << "} common_axes={"
+      << "lx=" << gamepad.lx
+      << " ly=" << gamepad.ly
+      << " rx=" << gamepad.rx
+      << " ry=" << gamepad.ry
+      << " lt=" << gamepad.lt
+      << " rt=" << gamepad.rt << "} buttons={"
+      << "A=" << gamepad.A.pressed
+      << " B=" << gamepad.B.pressed
+      << " X=" << gamepad.X.pressed
+      << " Y=" << gamepad.Y.pressed
+      << " LB=" << gamepad.LB.pressed
+      << " RB=" << gamepad.RB.pressed
+      << " back=" << gamepad.back.pressed
+      << " start=" << gamepad.start.pressed
+      << " up=" << gamepad.up.pressed
+      << " down=" << gamepad.down.pressed
+      << " left=" << gamepad.left.pressed
+      << " right=" << gamepad.right.pressed << '}';
+  return out.str();
 }
 
 SdlGamepadRemote::SdlGamepadRemote(SdlGamepadRemoteOptions options)
@@ -124,6 +157,8 @@ std::optional<CommonGamepad> SdlGamepadRemote::read() {
 
   last_snapshot_ = snapshot;
   convert_sdl_snapshot_to_common_gamepad(snapshot, gamepad_);
+  // const std::string debug_line = format_sdl_gamepad_debug_line(snapshot, gamepad_);
+  // std::fprintf(stderr, "%s\n", debug_line.c_str());
   return gamepad_;
 }
 
