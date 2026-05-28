@@ -1,5 +1,6 @@
 #include "../../../include/bridge/dds/dds_state_egress.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>

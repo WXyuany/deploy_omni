@@ -2,7 +2,7 @@ schema_version: 1
 
 bridge:
   robot_name: unitree_g1
-  loop_rate_hz: 500
+  loop_rate_hz: 1000
   stale_command_timeout_ms: 120
   startup_idle_policy:
     mode: zero_torque
@@ -42,8 +42,14 @@ adapter:
   command_mode: raw_low_level
   connection:
     transport: dds
-    interface_hint: enx9c69d3018e32 
+    interface_hint: enx9c69d372b08c 
     interface_hint_1: #wlp0s20f3
+  topics:
+    command: rt/lowcmd
+    state: rt/lowstate
+    sim_command: custom/mujoco/rt/lowcmd
+    sim_state: custom/mujoco/rt/lowstate
+    imu: rt/secondary_imu
   startup:
     read_initial_state_timeout_ms: 1000
     require_healthy_hardware: true

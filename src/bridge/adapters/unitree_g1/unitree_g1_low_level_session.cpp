@@ -5,7 +5,10 @@
 #include <chrono>
 #include <cstdio>
 #include <functional>
+#include <sstream>
 #include <utility>
+
+#include "../../../../include/bridge/observability/forwarding_logger.hpp"
 
 namespace bridge::adapters::unitree_g1 {
 namespace {
@@ -13,6 +16,7 @@ namespace {
 constexpr std::uint64_t kFallbackTickNs = 1'000'000;
 constexpr char kDdsTransportPrefix[] = "dds:";
 constexpr int kMaxMotionReleaseAttempts = 3;
+constexpr auto kLowStateReceiveTimeout = std::chrono::milliseconds(500);
 
 [[nodiscard]] bridge::core::AdapterCallResult motion_release_failure(
     const std::string& detail, const std::uint64_t timestamp_ns) {
@@ -35,6 +39,29 @@ constexpr int kMaxMotionReleaseAttempts = 3;
   return value == 0 ? kFallbackTickNs : value;
 }
 
+[[nodiscard]] std::uint64_t monotonic_now_ns() noexcept {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
+[[nodiscard]] std::string format_one_decimal(const double value) {
+  std::ostringstream output;
+  output.setf(std::ios::fixed);
+  output.precision(1);
+  output << value;
+  return output.str();
+}
+
+[[nodiscard]] std::string format_two_decimal(const double value) {
+  std::ostringstream output;
+  output.setf(std::ios::fixed);
+  output.precision(2);
+  output << value;
+  return output.str();
+}
+
 [[nodiscard]] bridge::core::BridgeFault make_fault(
     const bridge::core::FaultCategory category,
     const bridge::core::FaultSeverity severity,
@@ -50,6 +77,12 @@ constexpr int kMaxMotionReleaseAttempts = 3;
       .sequence = sequence,
       .timestamp_ns = timestamp_ns,
   };
+}
+
+[[nodiscard]] bool low_state_receive_timed_out(
+    const std::chrono::steady_clock::time_point receive_time) noexcept {
+  return receive_time != std::chrono::steady_clock::time_point{} &&
+         std::chrono::steady_clock::now() - receive_time > kLowStateReceiveTimeout;
 }
 
 [[nodiscard]] std::vector<double> to_vector(const std::array<float, 3>& values) {
@@ -126,48 +159,15 @@ constexpr int kMaxMotionReleaseAttempts = 3;
   return state;
 }
 
-void print_command_info(const bridge::core::CommandFrame& command,
-                        const std::uint8_t mode_machine,
-                        const std::size_t hardware_slot_count) {
-  const std::size_t width = std::min<std::size_t>(
-      hardware_slot_count, command.joints.width());
-  std::fprintf(stderr,
-               "[UnitreeG1LowLevelSession.write_command] ========== Command =========="
-               "\n");
-  std::fprintf(stderr,
-               "sequence=%llu mode_label=%s mode_pr=%u mode_machine=%u joints=%zu\n",
-               static_cast<unsigned long long>(command.sequence),
-               command.mode_label.c_str(), command.mode_pr, mode_machine, width);
-  std::fprintf(stderr,
-               "idx        q        dq       tau        kp        kd\n");
-  for (std::size_t index = 0; index < width; ++index) {
-    const double q = index < command.joints.position.size()
-                         ? command.joints.position[index]
-                         : 0.0;
-    const double dq = index < command.joints.velocity.size()
-                          ? command.joints.velocity[index]
-                          : 0.0;
-    const double tau = index < command.joints.effort.size()
-                           ? command.joints.effort[index]
-                           : 0.0;
-    const double kp = index < command.joints.stiffness.size()
-                          ? command.joints.stiffness[index]
-                          : 0.0;
-    const double kd = index < command.joints.damping.size()
-                          ? command.joints.damping[index]
-                          : 0.0;
-    std::fprintf(stderr, "%3zu %8.4f %8.4f %8.4f %8.4f %8.4f\n", index,
-                 q, dq, tau, kp, kd);
-  }
-  std::fprintf(stderr,
-               "[UnitreeG1LowLevelSession.write_command] =============================="
-               "\n");
-}
-
 }  // namespace
 
 UnitreeG1LowLevelSession::UnitreeG1LowLevelSession(LowLevelSessionConfig config)
     : config_(std::move(config)) {}
+
+std::uint64_t select_reader_loop_sleep_ns(
+    const std::uint64_t configured_read_timeout_ns) noexcept {
+  return configured_read_timeout_ns == 0 ? kFallbackTickNs : configured_read_timeout_ns;
+}
 
 UnitreeG1LowLevelSession::~UnitreeG1LowLevelSession() {
   stop_reader_ = true;
@@ -328,6 +328,28 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
     std::lock_guard<std::mutex> lock(state_mutex_);
     return latest_imu_state_;
   };
+  auto last_low_state_receive_time = [this]() {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return last_low_state_receive_time_;
+  };
+  auto last_low_state_receive_time_ns = [this]() {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return last_low_state_receive_time_ns_;
+  };
+
+  if (state.has_value() && low_state_receive_timed_out(last_low_state_receive_time())) {
+    connection_alive_ = false;
+    result.result = {
+        .status = bridge::core::AdapterCallStatus::kRetryableError,
+        .detail = "g1 low-level lowstate receive timeout",
+        .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
+                            bridge::core::FaultSeverity::kRecoverable,
+                            bridge::core::LifecycleState::kActive,
+                            "g1 low-level lowstate receive timeout", 0,
+                            state_time_ns_),
+    };
+    return result;
+  }
 
   if (!state.has_value() && !latest_low_state().has_value()) {
     for (std::uint32_t attempt = 0; attempt < config_.read_retry_attempts;
@@ -365,9 +387,24 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
       return result;
     }
 
+    if (low_state_receive_timed_out(last_low_state_receive_time())) {
+      connection_alive_ = false;
+      result.result = {
+          .status = bridge::core::AdapterCallStatus::kRetryableError,
+          .detail = "g1 low-level lowstate receive timeout",
+          .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
+                              bridge::core::FaultSeverity::kRecoverable,
+                              bridge::core::LifecycleState::kActive,
+                              "g1 low-level lowstate receive timeout", 0,
+                              state_time_ns_),
+      };
+      return result;
+    }
+
     LowLevelSessionState fallback = make_session_state_from_low_state(
         *low_state, latest_imu_state(), config_.hardware_slot_count,
         state_time_ns_);
+    fallback.receive_time_ns = last_low_state_receive_time_ns();
 
     if (config_.stale_state_after_ns > 0 &&
         state_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&
@@ -386,6 +423,14 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
 
   mode_pr_.store(state->mode_pr);
   mode_machine_.store(state->mode_machine);
+  if (const auto stats = state_read_stats_.record(monotonic_now_ns(), state->receive_time_ns);
+      stats.has_value()) {
+    bridge::observability::forwarding_logger()->info(
+        "[g1_state_read] read_hz=" + format_two_decimal(stats->frequency_hz) +
+        " robot_rx_to_read_avg_us=" + format_one_decimal(stats->avg_latency_us) +
+        " robot_rx_to_read_max_us=" + format_one_decimal(stats->max_latency_us) +
+        " interval_avg_us=" + format_one_decimal(stats->avg_interval_us));
+  }
 
   result.state = std::move(state);
   result.result = result.state->degraded
@@ -407,11 +452,23 @@ void UnitreeG1LowLevelSession::handle_low_state_message(
   if (config_.verify_low_state_crc && !validate_low_state_crc(state)) {
     return;
   }
+  const auto receive_time = std::chrono::steady_clock::now();
+  const std::uint64_t receive_time_ns = monotonic_now_ns();
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     latest_low_state_ = state;
     last_low_state_time_ns_ = state_time_ns_;
+    last_low_state_receive_time_ = receive_time;
+    last_low_state_receive_time_ns_ = receive_time_ns;
   }
+  if (const auto stats = lowstate_receive_stats_.record(receive_time_ns); stats.has_value()) {
+    bridge::observability::forwarding_logger()->info(
+        "[g1_state_rx] robot_lowstate_hz=" + format_two_decimal(stats->frequency_hz) +
+        " interval_avg_us=" + format_one_decimal(stats->avg_interval_us) +
+        " interval_min_us=" + format_one_decimal(stats->min_interval_us) +
+        " interval_max_us=" + format_one_decimal(stats->max_interval_us));
+  }
+  connection_alive_ = true;
   mode_pr_.store(state.mode_pr());
   mode_machine_.store(state.mode_machine());
 }
@@ -453,17 +510,26 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
   mode_pr_.store(command.mode_pr);
   const std::uint8_t effective_mode_machine = command.mode_machine;
   mode_machine_.store(effective_mode_machine);
-  const auto now = std::chrono::steady_clock::now();
-  if (last_command_print_time_ == std::chrono::steady_clock::time_point{} ||
-      now - last_command_print_time_ >= std::chrono::seconds(1)) {
-    print_command_info(command, effective_mode_machine, config_.hardware_slot_count);
-    last_command_print_time_ = now;
-  }
   last_packed_command_ = build_low_cmd_from_command(command, config_.hardware_slot_count,
                                                     effective_mode_machine);
 
+  const std::uint64_t write_begin_ns = monotonic_now_ns();
   if (lowcmd_publisher_ && last_packed_command_.has_value()) {
     connection_alive_ = lowcmd_publisher_->Write(*last_packed_command_);
+  }
+  const std::uint64_t write_end_ns = monotonic_now_ns();
+  const std::uint64_t source_time_ns =
+      command.receive_time_ns == 0 ? write_begin_ns : command.receive_time_ns;
+  if (const auto stats = command_write_stats_.record(write_end_ns, source_time_ns);
+      stats.has_value()) {
+    bridge::observability::forwarding_logger()->info(
+        "[g1_cmd_forward] write_hz=" + format_two_decimal(stats->frequency_hz) +
+        " ingress_to_write_avg_us=" + format_one_decimal(stats->avg_latency_us) +
+        " ingress_to_write_max_us=" + format_one_decimal(stats->max_latency_us) +
+        " interval_avg_us=" + format_one_decimal(stats->avg_interval_us) +
+        " last_dds_write_us=" +
+        format_one_decimal(static_cast<double>(write_end_ns - write_begin_ns) / 1000.0) +
+        " connection_alive=" + (connection_alive_.load() ? "true" : "false"));
   }
 
   return {
@@ -504,24 +570,32 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_safe_command() {
 }
 
 void UnitreeG1LowLevelSession::reader_loop() {
+  const auto reader_loop_sleep =
+      std::chrono::nanoseconds(select_reader_loop_sleep_ns(config_.read_timeout_ns));
   while (!stop_reader_) {
     std::optional<unitree_hg::msg::dds_::LowState_> latest_low_state;
     std::optional<unitree_hg::msg::dds_::IMUState_> latest_imu_state;
     std::uint64_t last_low_state_time_ns = 0;
+    std::uint64_t last_low_state_receive_time_ns = 0;
+    std::chrono::steady_clock::time_point last_low_state_receive_time;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       latest_low_state = latest_low_state_;
       latest_imu_state = latest_imu_state_;
       last_low_state_time_ns = last_low_state_time_ns_;
+      last_low_state_receive_time_ns = last_low_state_receive_time_ns_;
+      last_low_state_receive_time = last_low_state_receive_time_;
     }
-    if (!latest_low_state.has_value()) {
-       std::this_thread::sleep_for(std::chrono::microseconds(1000));
+    if (!latest_low_state.has_value() ||
+        low_state_receive_timed_out(last_low_state_receive_time)) {
+       std::this_thread::sleep_for(reader_loop_sleep);
        continue;
      }
 
     LowLevelSessionState state = make_session_state_from_low_state(
         *latest_low_state, latest_imu_state, config_.hardware_slot_count,
         state_time_ns_);
+    state.receive_time_ns = last_low_state_receive_time_ns;
 
     if (config_.stale_state_after_ns > 0 &&
         state_time_ns_ > last_low_state_time_ns + config_.stale_state_after_ns &&
@@ -541,7 +615,7 @@ void UnitreeG1LowLevelSession::reader_loop() {
     }
     has_state_.store(true);
 
-    std::this_thread::sleep_for(std::chrono::microseconds(2000));
+    std::this_thread::sleep_for(reader_loop_sleep);
   }
 }
 
@@ -602,6 +676,7 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::shutdown() {
     latest_low_state_.reset();
     latest_imu_state_.reset();
     last_low_state_time_ns_ = 0;
+    last_low_state_receive_time_ = std::chrono::steady_clock::time_point{};
   }
   if (imu_subscriber_) {
     imu_subscriber_->CloseChannel();

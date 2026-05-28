@@ -52,6 +52,12 @@ struct AdapterMotionStateConfig {
   std::optional<std::string> initial_task;
 };
 
+struct AdapterTopicConfig {
+  std::string command;
+  std::string state;
+  std::string imu;
+};
+
 struct RobotAdapterConfig {
   std::string kind;
   std::string robot_name;
@@ -62,6 +68,7 @@ struct RobotAdapterConfig {
   AdapterStartupPolicyConfig startup;
   AdapterSafetyPolicyConfig safety;
   AdapterMotionStateConfig motion_state;
+  AdapterTopicConfig topics;
   std::vector<std::string> joint_names;
 
   [[nodiscard]] std::size_t joint_count() const noexcept {

@@ -2,6 +2,7 @@
 #include <string>
 
 #include "bridge/build_config.hpp"
+#include "../../include/bridge/adapters/unitree_g1/unitree_g1_adapter.hpp"
 #include "../../include/bridge/app/robot_assembly_factory.hpp"
 #include "../../include/bridge/config/bridge_config.hpp"
 
@@ -21,15 +22,19 @@ int main() {
   assert(assembled.assembly->adapter != nullptr);
   assert(assembled.assembly->command_ingress != nullptr);
   assert(assembled.assembly->state_egress != nullptr);
-  assert(assembled.assembly->gamepad_remote == nullptr);
+  assert(assembled.assembly->gamepad_remote != nullptr);
   assert(assembled.assembly->runtime != nullptr);
   assert(assembled.assembly->adapter->name() == std::string_view{"unitree_g1"});
-  assert(assembled.assembly->runtime->config.command_topic == "bridge/command");
-  assert(assembled.assembly->runtime->config.state_topic == "bridge/state");
+  const auto* g1_adapter = dynamic_cast<const bridge::adapters::unitree_g1::UnitreeG1Adapter*>(
+      assembled.assembly->adapter.get());
+  assert(g1_adapter != nullptr);
+  assert(g1_adapter->config().session.command_topic == "custom/mujoco/rt/lowcmd");
+  assert(g1_adapter->config().session.state_topic == "custom/mujoco/rt/lowstate");
+  assert(g1_adapter->config().session.imu_topic == "rt/secondary_imu");
+  assert(assembled.assembly->runtime->config.command_topic == "bridge/rt/lowcmd");
+  assert(assembled.assembly->runtime->config.state_topic == "bridge/rt/lowstate");
   assert(assembled.assembly->runtime->config.network_interface.empty() ||
-          assembled.assembly->runtime->config.network_interface == "robot_lan0" ||
-          assembled.assembly->runtime->config.network_interface == "wlo1" ||
-          assembled.assembly->runtime->config.network_interface == "wlp0s20f3");
+          assembled.assembly->runtime->config.network_interface == "enx9c69d3018e32");
 
 #if BRIDGE_BUILD_GAMEPAD_SDL
   auto gamepad_config = *loaded.config;

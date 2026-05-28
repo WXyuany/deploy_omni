@@ -6,12 +6,15 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
 
 #include "../../../include/bridge/extensions/hooks.hpp"
 #include "../../../include/bridge/gamepad/common_gamepad.hpp"
+#include "../../../include/bridge/observability/forwarding_logger.hpp"
+#include "../../../include/bridge/observability/forwarding_stats.hpp"
 
 namespace bridge::core {
 namespace {
@@ -26,6 +29,22 @@ struct CachedGamepadSample {
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch())
           .count());
+}
+
+[[nodiscard]] std::string format_one_decimal(const double value) {
+  std::ostringstream output;
+  output.setf(std::ios::fixed);
+  output.precision(1);
+  output << value;
+  return output.str();
+}
+
+[[nodiscard]] std::string format_two_decimal(const double value) {
+  std::ostringstream output;
+  output.setf(std::ios::fixed);
+  output.precision(2);
+  output << value;
+  return output.str();
 }
 
 [[nodiscard]] RunnerCallStatus map_adapter_status(
@@ -49,6 +68,12 @@ struct CachedGamepadSample {
 [[nodiscard]] bool is_waiting_for_initial_state_detail(
     const std::string& detail) noexcept {
   return detail.rfind("waiting for ", 0) == 0;
+}
+
+[[nodiscard]] bool is_lowstate_receive_timeout_detail(
+    const std::string& detail) noexcept {
+  return detail == "g1 low-level lowstate receive timeout" ||
+         detail == "pm01 robot state not available";
 }
 
 [[nodiscard]] BridgeFault make_fault(const FaultCategory category,
@@ -243,6 +268,14 @@ class BridgeRunner::Impl {
           !status_.first_state_received &&
           read_result.result.status == AdapterCallStatus::kRetryableError &&
           is_waiting_for_initial_state_detail(read_result.result.detail)) {
+        return make_runner_result(RunnerCallStatus::kDegraded,
+                                  read_result.result.detail,
+                                  status_.latched_fault);
+      }
+      if (status_.first_state_received &&
+          read_result.result.status == AdapterCallStatus::kRetryableError &&
+          is_lowstate_receive_timeout_detail(read_result.result.detail)) {
+        status_.degraded = true;
         return make_runner_result(RunnerCallStatus::kDegraded,
                                   read_result.result.detail,
                                   status_.latched_fault);
@@ -598,9 +631,25 @@ class BridgeRunner::Impl {
     }
 
     RunnerCallResult publish_result = dependencies_.state_egress->publish(state);
+    const std::uint64_t publish_end_ns = now_ns();
+    std::optional<observability::ForwardingStatsSnapshot> state_forward_stats;
+    if (publish_result.succeeded() && state.receive_time_ns != 0) {
+      state_forward_stats = state_forward_stats_.record(publish_end_ns, state.receive_time_ns);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (publish_result.succeeded()) {
       status_.last_state_publish_time_ns = state.publish_time_ns;
+      if (state_forward_stats.has_value()) {
+        bridge::observability::forwarding_logger()->info(
+            "[g1_state_forward] publish_hz=" +
+            format_two_decimal(state_forward_stats->frequency_hz) +
+            " robot_rx_to_publish_avg_us=" +
+            format_one_decimal(state_forward_stats->avg_latency_us) +
+            " robot_rx_to_publish_max_us=" +
+            format_one_decimal(state_forward_stats->max_latency_us) +
+            " interval_avg_us=" +
+            format_one_decimal(state_forward_stats->avg_interval_us));
+      }
       update_degraded_from_runner_locked(publish_result);
       return publish_result;
     }
@@ -830,6 +879,7 @@ class BridgeRunner::Impl {
   BridgeRunnerStatus status_;
   std::optional<CommandFrame> latest_command_;
   std::optional<CachedGamepadSample> latest_gamepad_sample_;
+  observability::ForwardingStats state_forward_stats_;
   std::uint64_t fault_sequence_{0};
   bool gamepad_remote_started_{false};
   std::atomic_bool gamepad_stop_requested_{false};

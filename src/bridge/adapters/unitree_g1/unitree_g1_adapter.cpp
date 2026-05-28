@@ -117,6 +117,7 @@ class UnitreeG1Adapter::Impl {
     state.sequence = ++state_sequence_;
     state.tick = session_read.state->tick;
     state.sample_time_ns = session_read.state->sample_time_ns;
+    state.receive_time_ns = session_read.state->receive_time_ns;
     state.publish_time_ns = session_read.state->sample_time_ns;
     state.low_state_version = session_read.state->low_state_version;
     state.low_state_reserve = session_read.state->low_state_reserve;

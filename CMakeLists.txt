@@ -425,6 +425,22 @@ if(BUILD_ROBOT_UNITREE_G1)
     PASS_REGULAR_EXPRESSION "Prints the latest state at 50 Hz"
   )
 
+  add_executable(lowstate_frequency_receiver
+    demo/lowstate_frequency_receiver.cpp
+  )
+  target_link_libraries(lowstate_frequency_receiver PRIVATE
+    bridge_cyclonedds_options
+    bridge_config
+  )
+  set_target_properties(lowstate_frequency_receiver PROPERTIES
+    BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
+  )
+  add_dependencies(lowstate_frequency_receiver unitree_sdk2_nomain)
+  add_test(NAME lowstate_frequency_receiver_help_test COMMAND lowstate_frequency_receiver --help)
+  set_tests_properties(lowstate_frequency_receiver_help_test PROPERTIES
+    PASS_REGULAR_EXPRESSION "Prints received LowState frequency"
+  )
+
   add_executable(gamepad_dds_receiver
     demo/gamepad_dds_receiver.cpp
   )
@@ -475,6 +491,16 @@ if(BUILD_TESTING)
 
   bridge_add_test(runner_frequency_log_test
     tests/core/runner_frequency_log_test.cpp
+    bridge_project_options
+  )
+
+  bridge_add_test(dds_state_egress_frequency_test
+    tests/dds/dds_state_egress_frequency_test.cpp
+    bridge_project_options
+  )
+
+  bridge_add_test(forwarding_stats_test
+    tests/observability/forwarding_stats_test.cpp
     bridge_project_options
   )
 

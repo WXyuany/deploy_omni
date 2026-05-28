@@ -534,6 +534,52 @@ void TestWaitingForInitialStateDoesNotFailStopRunner() {
   assert(shutdown.succeeded());
 }
 
+void TestRobotStateUnavailableSkipsPublishAndResumesWithoutFailStop() {
+  FakeRobotSdkAdapter adapter({MakeState(2, 200, 200)});
+  adapter.push_read_result({
+      .result = {.status = AdapterCallStatus::kOk,
+                 .detail = "read",
+                 .fault = std::nullopt},
+      .state = MakeState(1, 100, 100),
+  });
+  adapter.push_read_result({
+      .result = {.status = AdapterCallStatus::kRetryableError,
+                 .detail = "pm01 robot state not available",
+                 .fault = std::nullopt},
+      .state = std::nullopt,
+  });
+  FakeCommandIngress ingress;
+  FakeStateEgress egress;
+  BridgeRunner runner(MakeConfig(), {.adapter = &adapter,
+                                     .command_ingress = &ingress,
+                                     .state_egress = &egress});
+
+  assert(runner.initialize().succeeded());
+
+  const RunnerCallResult first_run = runner.run();
+  assert(first_run.succeeded());
+  assert(runner.status().lifecycle_state == LifecycleState::kActive);
+  assert(egress.publish_count() == 1);
+
+  const RunnerCallResult timeout_run = runner.run();
+  assert(timeout_run.succeeded());
+  assert(timeout_run.status == RunnerCallStatus::kDegraded);
+  assert(timeout_run.detail == "pm01 robot state not available");
+  assert(runner.status().lifecycle_state == LifecycleState::kActive);
+  assert(!runner.status().fail_stop_active);
+  assert(!runner.status().latched_fault.has_value());
+  assert(egress.publish_count() == 1);
+
+  const RunnerCallResult resumed_run = runner.run();
+  assert(resumed_run.succeeded());
+  assert(runner.status().lifecycle_state == LifecycleState::kActive);
+  assert(!runner.status().fail_stop_active);
+  assert(egress.publish_count() == 2);
+
+  const RunnerCallResult shutdown = runner.shutdown();
+  assert(shutdown.succeeded());
+}
+
 void TestObservationHookSeesPublishedStateAndEffectiveCommand() {
   FakeRobotSdkAdapter adapter({MakeState(1, 100, 100)});
   FakeCommandIngress ingress;
@@ -602,6 +648,7 @@ int main() {
   TestHappyPathLifecycleProgression();
   TestStaleCommandTriggersFailStop();
   TestWaitingForInitialStateDoesNotFailStopRunner();
+  TestRobotStateUnavailableSkipsPublishAndResumesWithoutFailStop();
   TestObservationHookSeesPublishedStateAndEffectiveCommand();
   TestFreshGamepadRemoteOverlaysPublishedWirelessRemote();
   return 0;

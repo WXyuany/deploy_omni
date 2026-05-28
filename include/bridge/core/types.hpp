@@ -180,6 +180,7 @@ struct StateFrame {
   std::uint64_t sequence{0};
   std::uint32_t tick{0};
   std::uint64_t sample_time_ns{0};
+  std::uint64_t receive_time_ns{0};
   std::uint64_t publish_time_ns{0};
   std::array<std::uint32_t, 2> low_state_version{1U, 0U};
   std::array<std::uint32_t, 4> low_state_reserve{};

@@ -122,7 +122,7 @@ void TestInitialMotionTaskAllowsConfiguredMotionWrite() {
          AdapterCallStatus::kOk);
 }
 
-void TestDdsJointIndicesDriveReadbackProjection() {
+void TestDdsJointIndicesDriveWriteDoesNotPublishSyntheticState() {
   Pm01Adapter adapter(MakeMappedConfig());
   assert(adapter.initialize().status == AdapterCallStatus::kOk);
   assert(adapter.read_state().result.status == AdapterCallStatus::kOk);
@@ -136,13 +136,39 @@ void TestDdsJointIndicesDriveReadbackProjection() {
 
   assert(adapter.write_command(command).status == AdapterCallStatus::kOk);
   const auto read = adapter.read_state();
-  assert(read.result.status == AdapterCallStatus::kOk);
-  assert(read.state.has_value());
-  for (std::size_t index = 0; index < command.joints.position.size(); ++index) {
-    assert(read.state->joints.position[index] == command.joints.position[index]);
-    assert(read.state->joints.velocity[index] == command.joints.velocity[index]);
-    assert(read.state->joints.effort[index] == command.joints.effort[index]);
-  }
+  assert(read.result.status == AdapterCallStatus::kRetryableError);
+  assert(!read.state.has_value());
+}
+
+void TestReadStateRequiresFreshRobotStateEachCycle() {
+  Pm01Adapter adapter(MakeBaseConfig());
+  assert(adapter.initialize().status == AdapterCallStatus::kOk);
+
+  const auto first = adapter.read_state();
+  assert(first.result.status == AdapterCallStatus::kOk);
+  assert(first.state.has_value());
+
+  const auto second = adapter.read_state();
+  assert(second.result.status == AdapterCallStatus::kRetryableError);
+  assert(!second.state.has_value());
+  assert(second.result.fault.has_value());
+  assert(second.result.fault->category == FaultCategory::kAdapterRead);
+}
+
+void TestCommandWriteDoesNotCreateRobotState() {
+  Pm01AdapterConfig config = MakeBaseConfig();
+  config.motion_state.initial_task = "joint_bridge";
+  Pm01Adapter adapter(config);
+  assert(adapter.initialize().status == AdapterCallStatus::kOk);
+  assert(adapter.read_state().result.status == AdapterCallStatus::kOk);
+
+  auto command = MakeCommand(ControlMode::kPosition);
+  command.joints.position[0] = 42.0;
+  assert(adapter.write_command(command).status == AdapterCallStatus::kOk);
+
+  const auto read = adapter.read_state();
+  assert(read.result.status == AdapterCallStatus::kRetryableError);
+  assert(!read.state.has_value());
 }
 
 void TestReadStateProvidesDefaultImuWhenUnavailable() {
@@ -165,12 +191,17 @@ void TestReadStateProvidesDefaultImuWhenUnavailable() {
   assert(read.state->joints.position.size() == 24U);
 }
 
-void TestReadStateEchoesRawDdsModeBytes() {
+void TestCommandWriteDoesNotChangeReadableModeBytes() {
   Pm01AdapterConfig config = MakeBaseConfig();
   config.motion_state.initial_task = "joint_bridge";
   Pm01Adapter adapter(config);
   assert(adapter.initialize().status == AdapterCallStatus::kOk);
-  assert(adapter.read_state().result.status == AdapterCallStatus::kOk);
+
+  const auto initial = adapter.read_state();
+  assert(initial.result.status == AdapterCallStatus::kOk);
+  assert(initial.state.has_value());
+  assert(initial.state->mode_pr == 0U);
+  assert(initial.state->mode_machine == 0U);
 
   auto command = MakeCommand(ControlMode::kPosition);
   command.mode_pr = 11U;
@@ -178,10 +209,8 @@ void TestReadStateEchoesRawDdsModeBytes() {
   assert(adapter.write_command(command).status == AdapterCallStatus::kOk);
 
   const auto read = adapter.read_state();
-  assert(read.result.status == AdapterCallStatus::kOk);
-  assert(read.state.has_value());
-  assert(read.state->mode_pr == 11U);
-  assert(read.state->mode_machine == 4U);
+  assert(read.result.status == AdapterCallStatus::kRetryableError);
+  assert(!read.state.has_value());
 }
 
 void TestSafeCommandUnsupportedReportsCapability() {
@@ -247,9 +276,11 @@ int main() {
   TestMotionStateGateBlocksCommandUntilJointBridgeIsActive();
   TestMotionStateGateUsesConfiguredRequiredTask();
   TestInitialMotionTaskAllowsConfiguredMotionWrite();
-  TestDdsJointIndicesDriveReadbackProjection();
+  TestDdsJointIndicesDriveWriteDoesNotPublishSyntheticState();
+  TestReadStateRequiresFreshRobotStateEachCycle();
+  TestCommandWriteDoesNotCreateRobotState();
   TestReadStateProvidesDefaultImuWhenUnavailable();
-  TestReadStateEchoesRawDdsModeBytes();
+  TestCommandWriteDoesNotChangeReadableModeBytes();
   TestSafeCommandUnsupportedReportsCapability();
 #if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
   TestRos2BackendCanInitializeAndShutdown();

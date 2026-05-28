@@ -54,6 +54,7 @@ enum class AdapterSubsection {
   kStartup,
   kSafety,
   kMotionState,
+  kTopics,
 };
 
 enum class JointMappingSubsection {
@@ -107,6 +108,9 @@ struct RawBridgeConfig {
   std::optional<bool> motion_state_required;
   std::optional<std::string> motion_state_required_task;
   std::optional<std::string> motion_state_initial_task;
+  std::optional<std::string> adapter_command_topic;
+  std::optional<std::string> adapter_state_topic;
+  std::optional<std::string> adapter_imu_topic;
   JointMapValidationOptions joint_map_validation;
   std::vector<JointMapEntry> joint_map_entries;
 };
@@ -758,6 +762,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
             adapter_subsection = AdapterSubsection::kMotionState;
             continue;
           }
+          if (key_value->first == "topics") {
+            adapter_subsection = AdapterSubsection::kTopics;
+            continue;
+          }
         }
 
         if (key_value->first == "kind") {
@@ -823,6 +831,16 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
             raw->motion_state_required_task = key_value->second;
           } else if (key_value->first == "initial_task") {
             raw->motion_state_initial_task = key_value->second;
+          }
+        }
+
+        if (adapter_subsection == AdapterSubsection::kTopics) {
+          if (key_value->first == "command") {
+            raw->adapter_command_topic = key_value->second;
+          } else if (key_value->first == "state") {
+            raw->adapter_state_topic = key_value->second;
+          } else if (key_value->first == "imu") {
+            raw->adapter_imu_topic = key_value->second;
           }
         }
       }
@@ -1515,6 +1533,9 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.adapter.motion_state.required = motion_state_required;
   config.adapter.motion_state.required_task = motion_state_required_task;
   config.adapter.motion_state.initial_task = motion_state_initial_task;
+  config.adapter.topics.command = raw.adapter_command_topic.value_or("");
+  config.adapter.topics.state = raw.adapter_state_topic.value_or("");
+  config.adapter.topics.imu = raw.adapter_imu_topic.value_or("");
   config.adapter.joint_names = std::move(joint_names);
 
   config.joint_map_validation = joint_map_validation;

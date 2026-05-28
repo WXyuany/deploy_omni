@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "../../include/bridge/adapters/unitree_g1/unitree_g1_low_level_session.hpp"
+#include "../../include/bridge/observability/forwarding_logger.hpp"
 #include <unitree/idl/hg/IMUState_.hpp>
 #include <unitree/idl/hg/LowState_.hpp>
 
@@ -16,6 +17,7 @@ namespace {
 
 using bridge::adapters::unitree_g1::LowLevelSessionConfig;
 using bridge::adapters::unitree_g1::UnitreeG1LowLevelSession;
+using bridge::adapters::unitree_g1::select_reader_loop_sleep_ns;
 using bridge::core::AdapterCallStatus;
 using bridge::core::CommandFrame;
 using bridge::core::ControlMode;
@@ -275,38 +277,36 @@ std::size_t CountOccurrences(const std::string& text, const std::string& needle)
   return count;
 }
 
-void TestWriteCommandPrintsCommandInfoOncePerSecond() {
+void TestWriteCommandLogsOnlyAggregateTelemetry() {
   auto config = MakeConfig();
   config.write_timeout_ns = 500'000'000ULL;
   UnitreeG1LowLevelSession session(config);
   assert(session.initialize().status == AdapterCallStatus::kOk);
 
-  const char* log_path = "/tmp/opencode/g1_write_command_print_test.log";
-  std::remove(log_path);
-  const int saved_stderr = dup(fileno(stderr));
-  assert(saved_stderr >= 0);
-  assert(freopen(log_path, "w", stderr) != nullptr);
+  std::remove("logs/g1_forwarding.log");
+  std::remove("logs/g1_forwarding.1.log");
+  std::remove("logs/g1_forwarding.2.log");
+  std::remove("logs/g1_forwarding.3.log");
 
   auto command = MakeCommand();
+  command.sequence = static_cast<std::uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
   assert(session.write_command(command).status == AdapterCallStatus::kOk);
   assert(session.write_command(command).status == AdapterCallStatus::kOk);
   std::this_thread::sleep_for(std::chrono::milliseconds(1100));
   assert(session.write_command(command).status == AdapterCallStatus::kOk);
-  std::fflush(stderr);
+  bridge::observability::forwarding_logger()->flush();
 
-  assert(dup2(saved_stderr, fileno(stderr)) >= 0);
-  close(saved_stderr);
-
-  std::ifstream log(log_path);
+  std::ifstream log("logs/g1_forwarding.log");
   const std::string output((std::istreambuf_iterator<char>(log)),
                            std::istreambuf_iterator<char>());
-  assert(CountOccurrences(output, "[UnitreeG1LowLevelSession.write_command] ========== Command ==========") == 2U);
-  assert(output.find("sequence=0 mode_label=torque mode_pr=5 mode_machine=99 joints=29") !=
-         std::string::npos);
-  assert(output.find("idx        q        dq       tau        kp        kd") !=
-         std::string::npos);
-  assert(output.find("  0   0.2500   0.5000   0.7500  10.0000   1.5000") !=
-         std::string::npos);
+  assert(output.find("[g1_cmd_sample]") == std::string::npos);
+}
+
+void TestReaderLoopSleepFollowsConfiguredReadPeriod() {
+  assert(select_reader_loop_sleep_ns(2'000'000ULL) == 2'000'000ULL);
+  assert(select_reader_loop_sleep_ns(1'000'000ULL) == 1'000'000ULL);
+  assert(select_reader_loop_sleep_ns(0ULL) == 1'000'000ULL);
 }
 
 void TestInvalidCrcLowStateIsRejectedWhenVerificationEnabled() {
@@ -365,6 +365,27 @@ void TestReadStateReportsStaleWhenCachedStateAgesOut() {
   assert(false && "expected stale/degraded state after cached lowstate ages out");
 }
 
+void TestReadStateStopsReturningCachedLowStateAfterReceiveTimeout() {
+  UnitreeG1LowLevelSession session(MakeConfig());
+  assert(session.initialize().status == AdapterCallStatus::kOk);
+
+  LowState_ state;
+  FillLowState(state);
+  session.handle_low_state_message(state);
+  assert(session.read_state().result.status == AdapterCallStatus::kOk);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(550));
+
+  const auto timed_out = session.read_state();
+  assert(timed_out.result.status == AdapterCallStatus::kRetryableError);
+  assert(!timed_out.state.has_value());
+
+  session.handle_low_state_message(state);
+  const auto resumed = session.read_state();
+  assert(resumed.result.status == AdapterCallStatus::kOk);
+  assert(resumed.state.has_value());
+}
+
 void TestHealthReportsDegradedWhenCachedStateGoesStale() {
   auto config = MakeConfig();
   config.stale_state_after_ns = 30;
@@ -403,12 +424,14 @@ int main() {
   TestReadStateRetriesUntilLowStateArrives();
   TestExplicitImuTopicOverridesEmbeddedImu();
   TestWriteCommandPacksLowCmdUsingCommandModeMachineAndMotorModes();
-  TestWriteCommandPrintsCommandInfoOncePerSecond();
+  TestWriteCommandLogsOnlyAggregateTelemetry();
+  TestReaderLoopSleepFollowsConfiguredReadPeriod();
   TestInvalidCrcLowStateIsRejectedWhenVerificationEnabled();
   TestInitializeFailsWhenMotionReleaseCannotBeSatisfied();
   TestInitializeSucceedsWhenMotionReleaseCompletes();
   TestInitializeFailsWhenMotionModeStaysActiveAfterReleaseAttempt();
   TestReadStateReportsStaleWhenCachedStateAgesOut();
+  TestReadStateStopsReturningCachedLowStateAfterReceiveTimeout();
   TestHealthReportsDegradedWhenCachedStateGoesStale();
   return 0;
 }

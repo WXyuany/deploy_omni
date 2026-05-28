@@ -161,6 +161,7 @@ class Pm01Adapter::Impl {
       connection_alive_ = true;
       has_read_state_ = false;
       lifecycle_state_ = bridge::core::LifecycleState::kWaitingForState;
+      deterministic_state_available_ = true;
       persistent_fault_.reset();
       return make_status_result(bridge::core::AdapterCallStatus::kOk,
                                 "pm01 adapter initialized with ROS2 backend");
@@ -178,6 +179,7 @@ class Pm01Adapter::Impl {
     connection_alive_ = true;
     has_read_state_ = false;
     lifecycle_state_ = bridge::core::LifecycleState::kWaitingForState;
+    deterministic_state_available_ = true;
     persistent_fault_.reset();
 
     return make_status_result(bridge::core::AdapterCallStatus::kOk,
@@ -210,6 +212,18 @@ class Pm01Adapter::Impl {
       return result;
 #endif
     }
+
+    if (!deterministic_state_available_) {
+      connection_alive_ = false;
+      result.result = make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
+                                        bridge::core::FaultCategory::kAdapterRead,
+                                        bridge::core::FaultSeverity::kRecoverable,
+                                        "pm01 robot state not available");
+      return result;
+    }
+
+    deterministic_state_available_ = false;
+    connection_alive_ = true;
 
     if (!has_read_state_) {
       has_read_state_ = true;
@@ -428,6 +442,7 @@ class Pm01Adapter::Impl {
     initialized_ = false;
     has_read_state_ = false;
     vendor_session_.reset();
+    deterministic_state_available_ = false;
     persistent_fault_.reset();
     lifecycle_state_ = bridge::core::LifecycleState::kStopped;
 
@@ -496,14 +511,18 @@ class Pm01Adapter::Impl {
     {
       std::lock_guard<std::mutex> ros_lock(ros_mutex_);
       joint_state = latest_joint_state_;
+      latest_joint_state_.reset();
       imu = latest_imu_;
     }
 
     if (!joint_state) {
+      const char* const detail = has_read_state_
+                                     ? "pm01 robot state not available"
+                                     : "waiting for /hardware/joint_state";
       result.result = make_error_result(bridge::core::AdapterCallStatus::kRetryableError,
                                         bridge::core::FaultCategory::kAdapterRead,
                                         bridge::core::FaultSeverity::kRecoverable,
-                                        "waiting for /hardware/joint_state");
+                                        detail);
       return result;
     }
 
@@ -721,31 +740,11 @@ class Pm01Adapter::Impl {
 
     void apply_command(const bridge::core::CommandFrame& command,
                        const std::vector<std::int64_t>& indices) {
-      assign_zeroed(acceleration_);
-      if (!command.joints.velocity.empty()) {
-        acceleration_ = velocity_;
-      }
-
-      assign_to_slots(position_, command.joints.position, indices);
-      assign_to_slots(velocity_, command.joints.velocity, indices);
-      assign_to_slots(effort_, command.joints.effort, indices);
-      assign_to_slots(stiffness_, command.joints.stiffness, indices);
-      assign_to_slots(damping_, command.joints.damping, indices);
-      mode_pr_ = command.mode_pr;
-      mode_machine_ =
-          command.mode_machine == 0U ? encode_control_mode(command.mode) : command.mode_machine;
-      set_active_mode(command.mode,
-                      command.mode_label.empty() ? control_mode_label(command.mode)
-                                                 : command.mode_label);
+      static_cast<void>(command);
+      static_cast<void>(indices);
     }
 
-    void apply_safe_command() {
-      std::fill(velocity_.begin(), velocity_.end(), 0.0);
-      std::fill(effort_.begin(), effort_.end(), 0.0);
-      std::fill(acceleration_.begin(), acceleration_.end(), 0.0);
-      set_active_mode(bridge::core::ControlMode::kSafeIdle,
-                      control_mode_label(bridge::core::ControlMode::kSafeIdle));
-    }
+    void apply_safe_command() {}
 
     void reset() {
       position_.clear();
@@ -1076,9 +1075,10 @@ class Pm01Adapter::Impl {
   bool initialized_{false};
   bool connection_alive_{false};
   bool has_read_state_{false};
+  bool deterministic_state_available_{false};
   bridge::core::LifecycleState lifecycle_state_{bridge::core::LifecycleState::kCreated};
   DeterministicVendorSession vendor_session_;
-#if defined(BRIDGE_PM01_REAL_BACKEND_AVAILABLE)
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
   bool owns_ros_context_{false};
   std::shared_ptr<rclcpp::Node> ros_node_;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> ros_executor_;

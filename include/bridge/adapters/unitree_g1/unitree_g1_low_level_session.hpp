@@ -21,6 +21,7 @@
 #include <unitree/robot/channel/channel_subscriber.hpp>
 
 #include "../../core/types.hpp"
+#include "../../observability/forwarding_stats.hpp"
 
 namespace bridge::adapters::unitree_g1 {
 
@@ -47,6 +48,7 @@ struct LowLevelSessionConfig {
 
 struct LowLevelSessionState {
   std::uint64_t sample_time_ns{0};
+  std::uint64_t receive_time_ns{0};
   std::uint32_t tick{0};
   std::array<std::uint32_t, 2> low_state_version{1U, 0U};
   std::array<std::uint32_t, 4> low_state_reserve{};
@@ -74,6 +76,9 @@ struct LowLevelSessionReadResult {
   bridge::core::AdapterCallResult result;
   std::optional<LowLevelSessionState> state;
 };
+
+[[nodiscard]] std::uint64_t select_reader_loop_sleep_ns(
+    std::uint64_t configured_read_timeout_ns) noexcept;
 
 class UnitreeG1LowLevelSession {
  public:
@@ -106,12 +111,16 @@ class UnitreeG1LowLevelSession {
   std::atomic<std::uint8_t> mode_pr_{0};
   std::atomic<std::uint8_t> mode_machine_{0};
   std::uint64_t last_low_state_time_ns_{0};
+  std::uint64_t last_low_state_receive_time_ns_{0};
   std::uint64_t last_read_time_ns_{0};
   std::uint64_t last_write_time_ns_{0};
-  std::chrono::steady_clock::time_point last_command_print_time_{};
+  std::chrono::steady_clock::time_point last_low_state_receive_time_{};
   std::optional<unitree_hg::msg::dds_::LowCmd_> last_packed_command_;
   std::optional<unitree_hg::msg::dds_::LowState_> latest_low_state_;
   std::optional<unitree_hg::msg::dds_::IMUState_> latest_imu_state_;
+  bridge::observability::ForwardingStats lowstate_receive_stats_;
+  bridge::observability::ForwardingStats state_read_stats_;
+  bridge::observability::ForwardingStats command_write_stats_;
   std::shared_ptr<unitree::robot::ChannelPublisher<unitree_hg::msg::dds_::LowCmd_>>
       lowcmd_publisher_;
   std::shared_ptr<unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowState_>>
