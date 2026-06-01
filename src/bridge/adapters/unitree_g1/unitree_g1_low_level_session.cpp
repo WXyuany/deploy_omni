@@ -170,14 +170,17 @@ std::uint64_t select_reader_loop_sleep_ns(
 }
 
 UnitreeG1LowLevelSession::~UnitreeG1LowLevelSession() {
-  stop_reader_ = true;
-  if (reader_thread_.joinable()) {
-    reader_thread_.join();
-  }
+  static_cast<void>(shutdown());
 }
 
 const LowLevelSessionConfig& UnitreeG1LowLevelSession::config() const noexcept {
   return config_;
+}
+
+void UnitreeG1LowLevelSession::set_state_available_callback(
+    std::function<void()> callback) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  config_.state_available_callback = std::move(callback);
 }
 
 const std::optional<unitree_hg::msg::dds_::LowCmd_>&
@@ -272,9 +275,6 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::initialize() {
     released_motion_.store(true);
   }
 
-  stop_reader_ = false;
-  reader_thread_ = std::thread(&UnitreeG1LowLevelSession::reader_loop, this);
-
   return {
       .status = bridge::core::AdapterCallStatus::kOk,
       .detail = config_.require_motion_release
@@ -288,7 +288,7 @@ void UnitreeG1LowLevelSession::handle_low_state_message(const void* message) {
   if (message == nullptr) {
     return;
   }
-  handle_low_state_message(*static_cast<const unitree_hg::msg::dds_::LowState_*>(message));
+  handle_low_state_message(*static_cast<const unitree_hg::msg::dds_::LowState_*>(message), true);
 }
 
 void UnitreeG1LowLevelSession::handle_imu_message(const void* message) {
@@ -299,6 +299,7 @@ void UnitreeG1LowLevelSession::handle_imu_message(const void* message) {
 }
 
 LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
+  const std::uint64_t read_start_ns = monotonic_now_ns();
   LowLevelSessionReadResult result;
   if (!initialized_.load()) {
     result.result = {
@@ -312,32 +313,79 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
     };
     return result;
   }
+  drain_pending_lowstate_receive_log();
 
-  std::optional<LowLevelSessionState> state;
-  {
-    std::lock_guard<std::mutex> lock(state_buffer_mutex_);
-    state = std::move(buffered_state_);
-    buffered_state_.reset();
+  struct LowStateSnapshot {
+    std::optional<unitree_hg::msg::dds_::LowState_> low_state;
+    std::optional<unitree_hg::msg::dds_::IMUState_> imu_state;
+    std::chrono::steady_clock::time_point receive_time;
+    std::uint64_t receive_time_ns{0};
+    std::uint64_t receive_generation{0};
+    std::uint64_t state_time_ns{0};
+    std::uint64_t consumed_generation{0};
+    std::uint64_t callback_store_duration_ns{0};
+  };
+  std::uint64_t last_snapshot_duration_ns = 0;
+  auto low_state_snapshot = [this, &last_snapshot_duration_ns]() {
+    const std::uint64_t snapshot_start_ns = monotonic_now_ns();
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    LowStateSnapshot snapshot{
+        .low_state = latest_low_state_,
+        .imu_state = latest_imu_state_,
+        .receive_time = last_low_state_receive_time_,
+        .receive_time_ns = last_low_state_receive_time_ns_,
+        .receive_generation = last_low_state_generation_,
+        .state_time_ns = last_low_state_time_ns_,
+        .consumed_generation = last_consumed_low_state_generation_,
+        .callback_store_duration_ns = last_low_state_callback_store_duration_ns_,
+    };
+    last_snapshot_duration_ns = monotonic_now_ns() - snapshot_start_ns;
+    return snapshot;
+  };
+  auto snapshot_has_unconsumed_low_state = [](const LowStateSnapshot& snapshot) {
+    return snapshot.low_state.has_value() && snapshot.receive_generation != 0 &&
+           snapshot.receive_generation != snapshot.consumed_generation;
+  };
+  auto mark_consumed_low_state = [this](const std::uint64_t receive_generation) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    last_consumed_low_state_generation_ = receive_generation;
+  };
+  LowStateSnapshot snapshot = low_state_snapshot();
+
+  if (!snapshot.low_state.has_value()) {
+    for (std::uint32_t attempt = 0; attempt < config_.read_retry_attempts;
+         ++attempt) {
+      if (config_.read_retry_interval_ns > 0) {
+        std::this_thread::sleep_for(
+            std::chrono::nanoseconds(config_.read_retry_interval_ns));
+      }
+      snapshot = low_state_snapshot();
+      if (snapshot_has_unconsumed_low_state(snapshot)) {
+        break;
+      }
+    }
   }
 
-  auto latest_low_state = [this]() -> std::optional<unitree_hg::msg::dds_::LowState_> {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    return latest_low_state_;
-  };
-  auto latest_imu_state = [this]() -> std::optional<unitree_hg::msg::dds_::IMUState_> {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    return latest_imu_state_;
-  };
-  auto last_low_state_receive_time = [this]() {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    return last_low_state_receive_time_;
-  };
-  auto last_low_state_receive_time_ns = [this]() {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    return last_low_state_receive_time_ns_;
-  };
+  state_time_ns_ += tick_or_default(config_.read_timeout_ns);
+  last_read_time_ns_ = state_time_ns_;
 
-  if (state.has_value() && low_state_receive_timed_out(last_low_state_receive_time())) {
+  snapshot = low_state_snapshot();
+  if (!snapshot.low_state.has_value()) {
+    const std::string detail = config_.state_topic.empty()
+                                   ? "waiting for g1 low-level state"
+                                   : "waiting for " + config_.state_topic;
+    result.result = {
+        .status = bridge::core::AdapterCallStatus::kRetryableError,
+        .detail = detail,
+        .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
+                            bridge::core::FaultSeverity::kRecoverable,
+                            bridge::core::LifecycleState::kWaitingForState,
+                            detail, 0, state_time_ns_),
+    };
+    return result;
+  }
+
+  if (low_state_receive_timed_out(snapshot.receive_time)) {
     connection_alive_ = false;
     result.result = {
         .status = bridge::core::AdapterCallStatus::kRetryableError,
@@ -351,79 +399,50 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
     return result;
   }
 
-  if (!state.has_value() && !latest_low_state().has_value()) {
-    for (std::uint32_t attempt = 0; attempt < config_.read_retry_attempts;
-         ++attempt) {
-      if (config_.read_retry_interval_ns > 0) {
-        std::this_thread::sleep_for(
-            std::chrono::nanoseconds(config_.read_retry_interval_ns));
-      }
-      {
-        std::lock_guard<std::mutex> lock(state_buffer_mutex_);
-        state = std::move(buffered_state_);
-        buffered_state_.reset();
-      }
-      if (state.has_value() || latest_low_state().has_value()) {
-        break;
-      }
-    }
+  if (!snapshot_has_unconsumed_low_state(snapshot)) {
+    result.result = {
+        .status = bridge::core::AdapterCallStatus::kRetryableError,
+        .detail = "g1 low-level state not yet available after read retries",
+        .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
+                            bridge::core::FaultSeverity::kRecoverable,
+                            bridge::core::LifecycleState::kWaitingForState,
+                            "g1 low-level state not yet available after read retries", 0,
+                            state_time_ns_),
+    };
+    return result;
   }
 
-  if (!state.has_value()) {
-    state_time_ns_ += tick_or_default(config_.read_timeout_ns);
-    last_read_time_ns_ = state_time_ns_;
+  const std::uint64_t state_build_start_ns = monotonic_now_ns();
+  LowLevelSessionState state = make_session_state_from_low_state(
+      *snapshot.low_state, snapshot.imu_state, config_.hardware_slot_count,
+      state_time_ns_);
+  const std::uint64_t state_build_end_ns = monotonic_now_ns();
+  state.receive_time_ns = snapshot.receive_time_ns;
+  state.receive_generation = snapshot.receive_generation;
+  state.callback_store_duration_ns = snapshot.callback_store_duration_ns;
+  state.read_start_time_ns = read_start_ns;
+  state.read_complete_time_ns = state_build_end_ns;
+  state.read_snapshot_duration_ns = last_snapshot_duration_ns;
+  state.stateframe_build_duration_ns = state_build_end_ns - state_build_start_ns;
+  state.callback_drops = dropped_lowstate_callback_updates_.load(std::memory_order_relaxed);
 
-    const std::optional<unitree_hg::msg::dds_::LowState_> low_state = latest_low_state();
-    if (!low_state.has_value()) {
-      result.result = {
-          .status = bridge::core::AdapterCallStatus::kRetryableError,
-          .detail = "g1 low-level state not yet available after read retries",
-          .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
-                              bridge::core::FaultSeverity::kRecoverable,
-                              bridge::core::LifecycleState::kWaitingForState,
-                              "g1 low-level state not yet available after read retries", 0,
-                              state_time_ns_),
-      };
-      return result;
-    }
-
-    if (low_state_receive_timed_out(last_low_state_receive_time())) {
-      connection_alive_ = false;
-      result.result = {
-          .status = bridge::core::AdapterCallStatus::kRetryableError,
-          .detail = "g1 low-level lowstate receive timeout",
-          .fault = make_fault(bridge::core::FaultCategory::kAdapterRead,
-                              bridge::core::FaultSeverity::kRecoverable,
-                              bridge::core::LifecycleState::kActive,
-                              "g1 low-level lowstate receive timeout", 0,
-                              state_time_ns_),
-      };
-      return result;
-    }
-
-    LowLevelSessionState fallback = make_session_state_from_low_state(
-        *low_state, latest_imu_state(), config_.hardware_slot_count,
-        state_time_ns_);
-    fallback.receive_time_ns = last_low_state_receive_time_ns();
-
-    if (config_.stale_state_after_ns > 0 &&
-        state_time_ns_ > last_low_state_time_ns_ + config_.stale_state_after_ns &&
-        last_low_state_time_ns_ != 0) {
-      fallback.stale = true;
-      fallback.degraded = true;
-      fallback.fault = make_fault(bridge::core::FaultCategory::kAdapterHealth,
-                                  bridge::core::FaultSeverity::kRecoverable,
-                                  bridge::core::LifecycleState::kActive,
-                                  "g1 low-level state is stale", 0,
-                                  state_time_ns_);
-    }
-
-    state = std::move(fallback);
+  if (config_.stale_state_after_ns > 0 &&
+      state_time_ns_ > snapshot.state_time_ns + config_.stale_state_after_ns &&
+      snapshot.state_time_ns != 0) {
+    state.stale = true;
+    state.degraded = true;
+    state.fault = make_fault(bridge::core::FaultCategory::kAdapterHealth,
+                                bridge::core::FaultSeverity::kRecoverable,
+                                bridge::core::LifecycleState::kActive,
+                                "g1 low-level state is stale", 0,
+                                state_time_ns_);
   }
 
-  mode_pr_.store(state->mode_pr);
-  mode_machine_.store(state->mode_machine);
-  if (const auto stats = state_read_stats_.record(monotonic_now_ns(), state->receive_time_ns);
+  mode_pr_.store(state.mode_pr);
+  mode_machine_.store(state.mode_machine);
+  mark_consumed_low_state(state.receive_generation);
+  if (const auto stats = state_read_stats_.record(monotonic_now_ns(), state.receive_time_ns);
+      config_.forwarding_log_enabled &&
       stats.has_value()) {
     bridge::observability::forwarding_logger()->info(
         "[g1_state_read] read_hz=" + format_two_decimal(stats->frequency_hz) +
@@ -449,34 +468,84 @@ LowLevelSessionReadResult UnitreeG1LowLevelSession::read_state() {
 
 void UnitreeG1LowLevelSession::handle_low_state_message(
     const ::unitree_hg::msg::dds_::LowState_& state) {
+  handle_low_state_message(state, false);
+}
+
+void UnitreeG1LowLevelSession::handle_low_state_message(
+    const ::unitree_hg::msg::dds_::LowState_& state,
+    const bool drop_if_state_lock_is_busy) {
   if (config_.verify_low_state_crc && !validate_low_state_crc(state)) {
     return;
   }
   const auto receive_time = std::chrono::steady_clock::now();
   const std::uint64_t receive_time_ns = monotonic_now_ns();
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    latest_low_state_ = state;
-    last_low_state_time_ns_ = state_time_ns_;
-    last_low_state_receive_time_ = receive_time;
-    last_low_state_receive_time_ns_ = receive_time_ns;
-  }
+  const std::uint64_t callback_store_start_ns = monotonic_now_ns();
   if (const auto stats = lowstate_receive_stats_.record(receive_time_ns); stats.has_value()) {
-    bridge::observability::forwarding_logger()->info(
-        "[g1_state_rx] robot_lowstate_hz=" + format_two_decimal(stats->frequency_hz) +
-        " interval_avg_us=" + format_one_decimal(stats->avg_interval_us) +
-        " interval_min_us=" + format_one_decimal(stats->min_interval_us) +
-        " interval_max_us=" + format_one_decimal(stats->max_interval_us));
+    std::unique_lock<std::mutex> telemetry_lock(telemetry_mutex_, std::try_to_lock);
+    if (telemetry_lock.owns_lock()) {
+      pending_lowstate_receive_stats_ = *stats;
+    }
   }
+
+  std::unique_lock<std::mutex> lock(state_mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    if (!drop_if_state_lock_is_busy) {
+      lock.lock();
+    }
+  }
+  if (!lock.owns_lock()) {
+    dropped_lowstate_callback_updates_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  std::function<void()> state_available_callback;
+  latest_low_state_ = state;
+  last_low_state_time_ns_ = state_time_ns_;
+  last_low_state_receive_time_ = receive_time;
+  last_low_state_receive_time_ns_ = receive_time_ns;
+  last_low_state_callback_store_duration_ns_ = monotonic_now_ns() - callback_store_start_ns;
+  ++last_low_state_generation_;
+  state_available_callback = config_.state_available_callback;
+  lock.unlock();
   connection_alive_ = true;
   mode_pr_.store(state.mode_pr());
   mode_machine_.store(state.mode_machine());
+  if (state_available_callback) {
+    state_available_callback();
+  }
 }
 
 void UnitreeG1LowLevelSession::handle_imu_message(
     const ::unitree_hg::msg::dds_::IMUState_& imu) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   latest_imu_state_ = imu;
+}
+
+void UnitreeG1LowLevelSession::drain_pending_lowstate_receive_log() {
+  if (!config_.forwarding_log_enabled) {
+    std::lock_guard<std::mutex> lock(telemetry_mutex_);
+    pending_lowstate_receive_stats_.reset();
+    return;
+  }
+  std::optional<bridge::observability::ForwardingStatsSnapshot> stats;
+  const std::uint64_t dropped_updates =
+      dropped_lowstate_callback_updates_.load(std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(telemetry_mutex_);
+    stats = pending_lowstate_receive_stats_;
+    pending_lowstate_receive_stats_.reset();
+  }
+  if (stats.has_value()) {
+    std::string line =
+        "[g1_state_rx] robot_lowstate_hz=" + format_two_decimal(stats->frequency_hz) +
+        " interval_avg_us=" + format_one_decimal(stats->avg_interval_us) +
+        " interval_min_us=" + format_one_decimal(stats->min_interval_us) +
+        " interval_max_us=" + format_one_decimal(stats->max_interval_us);
+    if (dropped_updates != last_logged_lowstate_callback_drops_) {
+      line += " callback_drops=" + std::to_string(dropped_updates);
+      last_logged_lowstate_callback_drops_ = dropped_updates;
+    }
+    bridge::observability::forwarding_logger()->info(line);
+  }
 }
 
 bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
@@ -521,6 +590,7 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
   const std::uint64_t source_time_ns =
       command.receive_time_ns == 0 ? write_begin_ns : command.receive_time_ns;
   if (const auto stats = command_write_stats_.record(write_end_ns, source_time_ns);
+      config_.forwarding_log_enabled &&
       stats.has_value()) {
     bridge::observability::forwarding_logger()->info(
         "[g1_cmd_forward] write_hz=" + format_two_decimal(stats->frequency_hz) +
@@ -569,56 +639,6 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_safe_command() {
   };
 }
 
-void UnitreeG1LowLevelSession::reader_loop() {
-  const auto reader_loop_sleep =
-      std::chrono::nanoseconds(select_reader_loop_sleep_ns(config_.read_timeout_ns));
-  while (!stop_reader_) {
-    std::optional<unitree_hg::msg::dds_::LowState_> latest_low_state;
-    std::optional<unitree_hg::msg::dds_::IMUState_> latest_imu_state;
-    std::uint64_t last_low_state_time_ns = 0;
-    std::uint64_t last_low_state_receive_time_ns = 0;
-    std::chrono::steady_clock::time_point last_low_state_receive_time;
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      latest_low_state = latest_low_state_;
-      latest_imu_state = latest_imu_state_;
-      last_low_state_time_ns = last_low_state_time_ns_;
-      last_low_state_receive_time_ns = last_low_state_receive_time_ns_;
-      last_low_state_receive_time = last_low_state_receive_time_;
-    }
-    if (!latest_low_state.has_value() ||
-        low_state_receive_timed_out(last_low_state_receive_time)) {
-       std::this_thread::sleep_for(reader_loop_sleep);
-       continue;
-     }
-
-    LowLevelSessionState state = make_session_state_from_low_state(
-        *latest_low_state, latest_imu_state, config_.hardware_slot_count,
-        state_time_ns_);
-    state.receive_time_ns = last_low_state_receive_time_ns;
-
-    if (config_.stale_state_after_ns > 0 &&
-        state_time_ns_ > last_low_state_time_ns + config_.stale_state_after_ns &&
-        last_low_state_time_ns != 0) {
-      state.stale = true;
-      state.degraded = true;
-      state.fault = make_fault(bridge::core::FaultCategory::kAdapterHealth,
-                               bridge::core::FaultSeverity::kRecoverable,
-                               bridge::core::LifecycleState::kActive,
-                               "g1 low-level state is stale", 0,
-                               state_time_ns_);
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(state_buffer_mutex_);
-      buffered_state_ = std::move(state);
-    }
-    has_state_.store(true);
-
-    std::this_thread::sleep_for(reader_loop_sleep);
-  }
-}
-
 bridge::core::AdapterHealth UnitreeG1LowLevelSession::health() const {
   std::uint64_t state_time_ns = 0;
   std::uint64_t last_low_state_time_ns = 0;
@@ -656,17 +676,8 @@ bridge::core::AdapterHealth UnitreeG1LowLevelSession::health() const {
 }
 
 bridge::core::AdapterCallResult UnitreeG1LowLevelSession::shutdown() {
-  stop_reader_ = true;
-  if (reader_thread_.joinable()) {
-    reader_thread_.join();
-  }
-  {
-    std::lock_guard<std::mutex> lock(state_buffer_mutex_);
-    buffered_state_.reset();
-  }
   initialized_.store(false);
   connection_alive_ = false;
-  has_state_.store(false);
   {
     std::lock_guard<std::mutex> lock(command_mutex_);
     last_packed_command_.reset();

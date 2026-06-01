@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -42,6 +43,11 @@ enum class StartupIdlePolicy {
   kNoCommandWrite,
 };
 
+enum class LowStateTriggerMode {
+  kFixedRate,
+  kEvent,
+};
+
 struct BridgeRunnerFaultPolicy {
   bool fail_stop_on_transport_fault{true};
   bool fail_stop_on_command_stale{true};
@@ -52,6 +58,8 @@ struct BridgeRunnerFaultPolicy {
 
 struct BridgeRunnerConfig {
   std::uint64_t loop_period_ns{0};
+  LowStateTriggerMode lowstate_trigger{LowStateTriggerMode::kFixedRate};
+  bool forwarding_log_enabled{true};
   std::uint64_t command_stale_timeout_ns{0};
   std::uint64_t gamepad_poll_interval_ns{0};
   std::uint64_t gamepad_stale_timeout_ns{0};
@@ -103,6 +111,8 @@ class BridgeRuntimeEventSink {
   virtual ~BridgeRuntimeEventSink() = default;
 
   virtual RunnerCallResult report_transport_fault(BridgeFault fault) = 0;
+
+  virtual void notify_state_available() = 0;
 };
 
 class BridgeCommandIngress {
@@ -125,7 +135,7 @@ class BridgeStateEgress {
 
   virtual RunnerCallResult start() = 0;
 
-  virtual RunnerCallResult publish(const StateFrame& state) = 0;
+  virtual RunnerCallResult publish(StateFrame& state) = 0;
 
   virtual RunnerCallResult stop() = 0;
 };
@@ -177,6 +187,11 @@ class BridgeRunner final : public BridgeCommandSink,
 
   [[nodiscard]] RunnerCallResult report_transport_fault(
       BridgeFault fault) override;
+
+  void notify_state_available() override;
+
+  [[nodiscard]] bool wait_for_state_available_until(
+      std::chrono::steady_clock::time_point deadline);
 
  private:
   class Impl;

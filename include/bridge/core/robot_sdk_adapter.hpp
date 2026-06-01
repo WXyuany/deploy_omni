@@ -6,6 +6,8 @@
 
 namespace bridge::core {
 
+class BridgeRuntimeEventSink;
+
 class RobotSdkAdapter {
  public:
   virtual ~RobotSdkAdapter() = default;
@@ -13,6 +15,10 @@ class RobotSdkAdapter {
   [[nodiscard]] virtual std::string_view name() const noexcept = 0;
 
   virtual AdapterCallResult initialize() = 0;
+
+  virtual void set_runtime_event_sink(BridgeRuntimeEventSink* event_sink) {
+    (void)event_sink;
+  }
 
   [[nodiscard]] virtual AdapterReadResult read_state() = 0;
 

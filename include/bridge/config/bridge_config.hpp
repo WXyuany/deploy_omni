@@ -94,6 +94,7 @@ struct DdsConfig {
 struct DebugPrintConfig {
   bool state{false};
   bool command{false};
+  bool forwarding_log{true};
   std::uint32_t rate_hz{0};
 
   [[nodiscard]] bool enabled() const noexcept {

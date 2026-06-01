@@ -3,6 +3,7 @@ schema_version: 1
 bridge:
   robot_name: unitree_g1
   loop_rate_hz: 1000
+  lowstate_trigger: event
   stale_command_timeout_ms: 120
   startup_idle_policy:
     mode: zero_torque
@@ -25,6 +26,7 @@ dds:
 debug_print:
   state: false
   cmd: false
+  forwarding_log: false
   rate_hz: 2
 
 gamepad:
@@ -42,14 +44,14 @@ adapter:
   command_mode: raw_low_level
   connection:
     transport: dds
-    interface_hint: enx9c69d372b08c 
-    interface_hint_1: #wlp0s20f3
+    interface_hint: wlp0s20f3
+    interface_hint_1: #wlp0s20f3 enx9c69d372b08c
   topics:
-    command: rt/lowcmd
-    state: rt/lowstate
+    command: custom/mujoco/rt/lowcmd
+    state: custom/mujoco/rt/lowstate
     sim_command: custom/mujoco/rt/lowcmd
     sim_state: custom/mujoco/rt/lowstate
-    imu: rt/secondary_imu
+    imu:
   startup:
     read_initial_state_timeout_ms: 1000
     require_healthy_hardware: true

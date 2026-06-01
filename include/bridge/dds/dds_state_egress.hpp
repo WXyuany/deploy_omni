@@ -29,7 +29,7 @@ class DdsStateEgress final : public core::BridgeStateEgress {
 
   core::RunnerCallResult start() override;
 
-  core::RunnerCallResult publish(const core::StateFrame& state) override;
+  core::RunnerCallResult publish(core::StateFrame& state) override;
 
   core::RunnerCallResult stop() override;
 

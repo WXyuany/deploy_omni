@@ -9,6 +9,7 @@ namespace {
 
 using bridge::config::BridgeConfigIssueCode;
 using bridge::config::BridgeConfigLoadStatus;
+using bridge::core::LowStateTriggerMode;
 using bridge::config::JointMap;
 using bridge::config::JointMapBuildResult;
 using bridge::config::load_bridge_config;
@@ -249,7 +250,8 @@ void TestLoadsUnitreeG1SampleBridgeConfig() {
   const auto& config = *result.config;
   assert(config.source_path == "../config/g1.sample.yaml");
   assert(config.robot_type == "unitree_g1");
-  assert(config.runner.loop_period_ns == 1'250'000U);
+  assert(config.runner.loop_period_ns == 1'000'000U);
+  assert(config.runner.lowstate_trigger == LowStateTriggerMode::kEvent);
   assert(config.dds.topics.command == "bridge/rt/lowcmd");
   assert(config.dds.topics.state == "bridge/rt/lowstate");
   assert(config.adapter.kind == "unitree_g1");
@@ -257,10 +259,12 @@ void TestLoadsUnitreeG1SampleBridgeConfig() {
   assert(config.adapter.robot_model == "g1");
   assert(config.adapter.command_mode == "raw_low_level");
   assert(config.adapter.connection.transport == "dds");
-  assert(config.adapter.connection.interface_hint == "enx9c69d3018e32");
+  assert(config.adapter.connection.interface_hint == "wlp0s20f3");
   assert(config.adapter.topics.command == "custom/mujoco/rt/lowcmd");
   assert(config.adapter.topics.state == "custom/mujoco/rt/lowstate");
-  assert(config.adapter.topics.imu == "rt/secondary_imu");
+  assert(config.adapter.topics.imu.empty());
+  assert(!config.debug_print.forwarding_log);
+  assert(!config.runner.forwarding_log_enabled);
   assert(config.gamepad.enabled);
   assert(config.gamepad.mapping_path ==
          "docs/joy_stick/include/hardware/gamecontrollerdb.txt");
@@ -275,6 +279,28 @@ void TestLoadsUnitreeG1SampleBridgeConfig() {
   assert(joint_map.succeeded());
 }
 
+void TestDefaultsLowStateTriggerToFixedRate() {
+  const std::string path = WritePm01Config("bridge_config_lowstate_trigger_default_test.yaml");
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->runner.lowstate_trigger == LowStateTriggerMode::kFixedRate);
+}
+
+void TestRejectsInvalidLowStateTrigger() {
+  const std::string path = WritePm01Config("bridge_config_lowstate_trigger_invalid_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "bridge:\n"
+           << "  lowstate_trigger: sometimes\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(!result.succeeded());
+  assert(HasIssueCode(result, BridgeConfigIssueCode::kUnsupportedValue));
+}
+
 void TestLoadsDebugPrintBlock() {
   const std::string path = "bridge_config_debug_print_test.yaml";
   WritePm01Config(path);
@@ -283,7 +309,8 @@ void TestLoadsDebugPrintBlock() {
     output << "debug_print:\n"
            << "  state: true\n"
            << "  cmd: false\n"
-           << "  rate_hz: 2\n";
+           << "  rate_hz: 2\n"
+           << "  forwarding_log: false\n";
   }
 
   const auto result = load_bridge_config(path);
@@ -292,6 +319,8 @@ void TestLoadsDebugPrintBlock() {
   assert(result.config->debug_print.state);
   assert(!result.config->debug_print.command);
   assert(result.config->debug_print.rate_hz == 2U);
+  assert(!result.config->debug_print.forwarding_log);
+  assert(!result.config->runner.forwarding_log_enabled);
 }
 
 void TestLoadsPm01MotionStateConfig() {
@@ -838,6 +867,8 @@ int main() {
   TestLoadsSampleBridgeConfig();
   TestLoadsPm01SampleBridgeConfig();
   TestLoadsUnitreeG1SampleBridgeConfig();
+  TestDefaultsLowStateTriggerToFixedRate();
+  TestRejectsInvalidLowStateTrigger();
   TestLoadsDebugPrintBlock();
   TestLoadsPm01MotionStateConfig();
   TestLoadsSimplifiedPm01InterfaceHintOverride();

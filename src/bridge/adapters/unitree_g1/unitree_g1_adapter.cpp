@@ -1,12 +1,14 @@
 #include "../../../../include/bridge/adapters/unitree_g1/unitree_g1_adapter.hpp"
 
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <unordered_set>
 #include <utility>
 
 #include "../../../../include/bridge/adapters/unitree_g1/unitree_g1_low_level_session.hpp"
+#include "../../../../include/bridge/core/bridge_runner.hpp"
 
 namespace bridge::adapters::unitree_g1 {
 namespace {
@@ -55,11 +57,18 @@ class UnitreeG1Adapter::Impl {
             .stale_state_after_ns = config_.session.read_timeout_ns,
             .require_motion_release = config_.session.require_motion_release,
             .verify_low_state_crc = config_.session.verify_low_state_crc,
+            .forwarding_log_enabled = config_.session.forwarding_log_enabled,
             .hardware_slot_count = config_.command_width(),
         }) {}
 
   [[nodiscard]] const UnitreeG1AdapterConfig& config() const noexcept {
     return config_;
+  }
+
+  void set_runtime_event_sink(bridge::core::BridgeRuntimeEventSink* event_sink) {
+    session_.set_state_available_callback(event_sink == nullptr
+                                              ? std::function<void()>{}
+                                              : [event_sink] { event_sink->notify_state_available(); });
   }
 
   [[nodiscard]] bridge::core::AdapterCallResult initialize() {
@@ -119,6 +128,14 @@ class UnitreeG1Adapter::Impl {
     state.sample_time_ns = session_read.state->sample_time_ns;
     state.receive_time_ns = session_read.state->receive_time_ns;
     state.publish_time_ns = session_read.state->sample_time_ns;
+    state.lowstate_callback_store_duration_ns =
+        session_read.state->callback_store_duration_ns;
+    state.read_start_time_ns = session_read.state->read_start_time_ns;
+    state.read_complete_time_ns = session_read.state->read_complete_time_ns;
+    state.read_snapshot_duration_ns = session_read.state->read_snapshot_duration_ns;
+    state.stateframe_build_duration_ns =
+        session_read.state->stateframe_build_duration_ns;
+    state.callback_drops = session_read.state->callback_drops;
     state.low_state_version = session_read.state->low_state_version;
     state.low_state_reserve = session_read.state->low_state_reserve;
     state.mode_pr = session_read.state->mode_pr;
@@ -323,6 +340,11 @@ UnitreeG1Adapter& UnitreeG1Adapter::operator=(UnitreeG1Adapter&&) noexcept = def
 
 const UnitreeG1AdapterConfig& UnitreeG1Adapter::config() const noexcept {
   return impl_->config();
+}
+
+void UnitreeG1Adapter::set_runtime_event_sink(
+    bridge::core::BridgeRuntimeEventSink* event_sink) {
+  impl_->set_runtime_event_sink(event_sink);
 }
 
 bridge::core::AdapterCallResult UnitreeG1Adapter::initialize() {

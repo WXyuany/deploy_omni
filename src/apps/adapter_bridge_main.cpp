@@ -65,6 +65,8 @@ void print_failure(const char* const stage, const std::string& detail) {
   RunnerFrequencyLogState frequency_state;
   const std::uint64_t wait_log_interval_cycles =
       loop_period_ns == 0 ? 250 : std::max<std::uint64_t>(1, 1000000000ULL / loop_period_ns);
+  const bool event_triggered_lowstate =
+      runner.config().lowstate_trigger == bridge::core::LowStateTriggerMode::kEvent;
 
   while (true) {
     const bridge::core::RunnerCallResult result = runner.run();
@@ -89,6 +91,12 @@ void print_failure(const char* const stage, const std::string& detail) {
         count.has_value()) {
       std::fprintf(stderr, "runner frequency: %llu Hz\n",
                    static_cast<unsigned long long>(*count));
+    }
+
+    if (event_triggered_lowstate) {
+      (void)runner.wait_for_state_available_until(
+          std::chrono::steady_clock::now() + std::chrono::hours(24));
+      continue;
     }
 
     if (loop_period_ns == 0) {
@@ -123,6 +131,7 @@ int main(int argc, char** argv) {
 
   bridge::core::BridgeRunner runner(loaded.config->runner,
                                     assembly.assembly->runner_dependencies());
+  assembly.assembly->adapter->set_runtime_event_sink(&runner);
 
   const bridge::core::RunnerCallResult initialize = runner.initialize();
   if (!initialize.succeeded()) {

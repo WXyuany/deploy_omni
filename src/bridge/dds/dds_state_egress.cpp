@@ -1,6 +1,7 @@
 #include "../../../include/bridge/dds/dds_state_egress.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -10,6 +11,13 @@
 
 namespace bridge::dds {
 namespace {
+
+[[nodiscard]] std::uint64_t now_ns() noexcept {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
 [[nodiscard]] core::RunnerCallResult fatal_result(std::string detail) {
   return {
@@ -77,13 +85,18 @@ core::RunnerCallResult DdsStateEgress::start() {
           .fault = std::nullopt};
 }
 
-core::RunnerCallResult DdsStateEgress::publish(const core::StateFrame& state) {
+core::RunnerCallResult DdsStateEgress::publish(core::StateFrame& state) {
+  const std::uint64_t translate_start_ns = now_ns();
   const StateTranslation lowstate =
       translate_hardware_state_to_lowstate(state, dependencies_.joint_map);
+  state.lowstate_translate_duration_ns = now_ns() - translate_start_ns;
   if (!lowstate.result.succeeded()) {
     return rejected_result(lowstate.result.detail, lowstate.result.fault);
   }
-  if (!impl_->publish(*lowstate.state)) {
+  const std::uint64_t write_start_ns = now_ns();
+  const bool published = impl_->publish(*lowstate.state);
+  state.dds_write_duration_ns = now_ns() - write_start_ns;
+  if (!published) {
     return fatal_result("failed to publish cyclone lowstate sample");
   }
   return {.status = core::RunnerCallStatus::kOk,

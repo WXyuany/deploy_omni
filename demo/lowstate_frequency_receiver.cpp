@@ -81,9 +81,12 @@ int main(int argc, char** argv) {
   std::uint8_t last_mode_pr = 0;
   std::uint8_t last_mode_machine = 0;
 
+  const std::string topic = loaded.config->adapter.topics.state.empty()
+                                ? std::string("rt/lowstate")
+                                : loaded.config->adapter.topics.state;
   auto subscriber = std::make_unique<
       unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowState_>>(
-      "rt/lowstate");
+      topic);
   subscriber->InitChannel(
       [&mutex, &received_count, &last_tick, &last_mode_pr,
        &last_mode_machine](const void* message) {
@@ -102,7 +105,7 @@ int main(int argc, char** argv) {
 
   std::fprintf(stderr,
                "lowstate_frequency_receiver topic=%s domain=%u iface=%s\n",
-               "rt/lowstate",
+               topic.c_str(),
                loaded.config->dds.domain_id,
                loaded.config->adapter.connection.interface_hint.c_str());
 

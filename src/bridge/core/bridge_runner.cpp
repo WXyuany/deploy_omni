@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -73,6 +74,7 @@ struct CachedGamepadSample {
 [[nodiscard]] bool is_lowstate_receive_timeout_detail(
     const std::string& detail) noexcept {
   return detail == "g1 low-level lowstate receive timeout" ||
+         detail == "g1 low-level state not yet available after read retries" ||
          detail == "pm01 robot state not available";
 }
 
@@ -217,6 +219,10 @@ class BridgeRunner::Impl {
 
     if (dependencies_.gamepad_remote != nullptr) {
       RunnerCallResult gamepad_start = dependencies_.gamepad_remote->start();
+      if (config_.forwarding_log_enabled) {
+        observability::forwarding_logger()->info("[gamepad_remote] start detail=" +
+                                                 gamepad_start.detail);
+      }
       if (gamepad_start.status != RunnerCallStatus::kOk) {
         std::lock_guard<std::mutex> lock(mutex_);
         status_.degraded = true;
@@ -496,6 +502,26 @@ class BridgeRunner::Impl {
                                   : RunnerCallStatus::kDegraded);
   }
 
+  void notify_state_available() {
+    {
+      std::lock_guard<std::mutex> lock(state_event_mutex_);
+      state_event_pending_ = true;
+    }
+    state_event_cv_.notify_all();
+  }
+
+  [[nodiscard]] bool wait_for_state_available_until(
+      const std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock<std::mutex> lock(state_event_mutex_);
+    const bool notified = state_event_cv_.wait_until(lock, deadline, [&] {
+      return state_event_pending_;
+    });
+    if (notified) {
+      state_event_pending_ = false;
+    }
+    return notified;
+  }
+
   void bind_owner(BridgeRunner* owner) noexcept { owner_ = owner; }
 
  private:
@@ -630,8 +656,10 @@ class BridgeRunner::Impl {
       dependencies_.observation_hook->observe_state(state, context);
     }
 
+    state.publish_start_time_ns = now_ns();
     RunnerCallResult publish_result = dependencies_.state_egress->publish(state);
     const std::uint64_t publish_end_ns = now_ns();
+    state.publish_complete_time_ns = publish_end_ns;
     std::optional<observability::ForwardingStatsSnapshot> state_forward_stats;
     if (publish_result.succeeded() && state.receive_time_ns != 0) {
       state_forward_stats = state_forward_stats_.record(publish_end_ns, state.receive_time_ns);
@@ -639,9 +667,9 @@ class BridgeRunner::Impl {
     std::lock_guard<std::mutex> lock(mutex_);
     if (publish_result.succeeded()) {
       status_.last_state_publish_time_ns = state.publish_time_ns;
-      if (state_forward_stats.has_value()) {
+      if (config_.forwarding_log_enabled && state_forward_stats.has_value()) {
         bridge::observability::forwarding_logger()->info(
-            "[g1_state_forward] publish_hz=" +
+            "[adapter_state_forward] publish_hz=" +
             format_two_decimal(state_forward_stats->frequency_hz) +
             " robot_rx_to_publish_avg_us=" +
             format_one_decimal(state_forward_stats->avg_latency_us) +
@@ -649,6 +677,39 @@ class BridgeRunner::Impl {
             format_one_decimal(state_forward_stats->max_latency_us) +
             " interval_avg_us=" +
             format_one_decimal(state_forward_stats->avg_interval_us));
+        const double rx_to_read_start_us =
+            state.read_start_time_ns >= state.receive_time_ns && state.receive_time_ns != 0
+                ? static_cast<double>(state.read_start_time_ns - state.receive_time_ns) /
+                      1000.0
+                : 0.0;
+        const double read_to_publish_start_us =
+            state.publish_start_time_ns >= state.read_complete_time_ns &&
+                    state.read_complete_time_ns != 0
+                ? static_cast<double>(state.publish_start_time_ns -
+                                      state.read_complete_time_ns) /
+                      1000.0
+                : 0.0;
+        const double rx_to_publish_us =
+            publish_end_ns >= state.receive_time_ns && state.receive_time_ns != 0
+                ? static_cast<double>(publish_end_ns - state.receive_time_ns) / 1000.0
+                : 0.0;
+        bridge::observability::forwarding_logger()->info(
+            "[adapter_latency_breakdown] rx_callback_store_us=" +
+            format_one_decimal(static_cast<double>(state.lowstate_callback_store_duration_ns) /
+                               1000.0) +
+            " rx_to_runner_read_start_us=" + format_one_decimal(rx_to_read_start_us) +
+            " read_snapshot_us=" +
+            format_one_decimal(static_cast<double>(state.read_snapshot_duration_ns) / 1000.0) +
+            " stateframe_build_us=" +
+            format_one_decimal(static_cast<double>(state.stateframe_build_duration_ns) / 1000.0) +
+            " read_to_publish_start_us=" + format_one_decimal(read_to_publish_start_us) +
+            " lowstate_translate_us=" +
+            format_one_decimal(static_cast<double>(state.lowstate_translate_duration_ns) /
+                               1000.0) +
+            " dds_write_us=" +
+            format_one_decimal(static_cast<double>(state.dds_write_duration_ns) / 1000.0) +
+            " rx_to_publish_us=" + format_one_decimal(rx_to_publish_us) +
+            " callback_drops=" + std::to_string(state.callback_drops));
       }
       update_degraded_from_runner_locked(publish_result);
       return publish_result;
@@ -688,13 +749,18 @@ class BridgeRunner::Impl {
           std::lock_guard<std::mutex> lock(mutex_);
           latest_gamepad_sample_ = CachedGamepadSample{.gamepad = *sample,
                                                        .receive_time_ns = now_ns()};
+          if (config_.forwarding_log_enabled && !gamepad_sample_logged_) {
+            observability::forwarding_logger()->info(
+                "[gamepad_remote] first_sample_received");
+            gamepad_sample_logged_ = true;
+          }
         }
       }
       std::this_thread::sleep_for(poll_interval);
     }
   }
 
-  void apply_gamepad_remote_locked(StateFrame* state) const {
+  void apply_gamepad_remote_locked(StateFrame* state) {
     if (!latest_gamepad_sample_.has_value()) {
       return;
     }
@@ -708,6 +774,11 @@ class BridgeRunner::Impl {
     }
     state->wireless_remote =
         gamepad::compress_to_wireless_remote(latest_gamepad_sample_->gamepad);
+    if (config_.forwarding_log_enabled && !gamepad_overlay_logged_) {
+      observability::forwarding_logger()->info(
+          "[gamepad_remote] wireless_remote_overlay_applied");
+      gamepad_overlay_logged_ = true;
+    }
   }
 
   [[nodiscard]] RunnerCallResult evaluate_health() {
@@ -876,12 +947,17 @@ class BridgeRunner::Impl {
   BridgeRunner* owner_{nullptr};
 
   mutable std::mutex mutex_;
+  std::mutex state_event_mutex_;
+  std::condition_variable state_event_cv_;
+  bool state_event_pending_{false};
   BridgeRunnerStatus status_;
   std::optional<CommandFrame> latest_command_;
   std::optional<CachedGamepadSample> latest_gamepad_sample_;
   observability::ForwardingStats state_forward_stats_;
   std::uint64_t fault_sequence_{0};
   bool gamepad_remote_started_{false};
+  bool gamepad_sample_logged_{false};
+  bool gamepad_overlay_logged_{false};
   std::atomic_bool gamepad_stop_requested_{false};
   std::thread gamepad_thread_;
 };
@@ -914,6 +990,13 @@ CommandSubmissionResult BridgeRunner::submit_latest_command(CommandFrame command
 
 RunnerCallResult BridgeRunner::report_transport_fault(BridgeFault fault) {
   return impl_->report_transport_fault(std::move(fault));
+}
+
+void BridgeRunner::notify_state_available() { impl_->notify_state_available(); }
+
+bool BridgeRunner::wait_for_state_available_until(
+    const std::chrono::steady_clock::time_point deadline) {
+  return impl_->wait_for_state_available_until(deadline);
 }
 
 }

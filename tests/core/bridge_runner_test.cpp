@@ -1,7 +1,9 @@
 #include <cassert>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -11,6 +13,7 @@
 
 #include "../../include/bridge/core/bridge_runner.hpp"
 #include "../../include/bridge/extensions/hooks.hpp"
+#include "../../include/bridge/observability/forwarding_logger.hpp"
 
 namespace {
 
@@ -243,8 +246,10 @@ class FakeStateEgress final : public BridgeStateEgress {
             .fault = std::nullopt};
   }
 
-  RunnerCallResult publish(const StateFrame& state) override {
+  RunnerCallResult publish(StateFrame& state) override {
     assert(started_);
+    state.lowstate_translate_duration_ns = 11'000U;
+    state.dds_write_duration_ns = 22'000U;
     publish_count_ += 1;
     published_states_.push_back(state);
     return {.status = RunnerCallStatus::kOk,
@@ -580,6 +585,52 @@ void TestRobotStateUnavailableSkipsPublishAndResumesWithoutFailStop() {
   assert(shutdown.succeeded());
 }
 
+void TestG1NoFreshLowStateSkipsPublishAndResumesWithoutFailStop() {
+  FakeRobotSdkAdapter adapter({MakeState(2, 200, 200)});
+  adapter.push_read_result({
+      .result = {.status = AdapterCallStatus::kOk,
+                 .detail = "read",
+                 .fault = std::nullopt},
+      .state = MakeState(1, 100, 100),
+  });
+  adapter.push_read_result({
+      .result = {.status = AdapterCallStatus::kRetryableError,
+                 .detail = "g1 low-level state not yet available after read retries",
+                 .fault = std::nullopt},
+      .state = std::nullopt,
+  });
+  FakeCommandIngress ingress;
+  FakeStateEgress egress;
+  BridgeRunner runner(MakeConfig(), {.adapter = &adapter,
+                                     .command_ingress = &ingress,
+                                     .state_egress = &egress});
+
+  assert(runner.initialize().succeeded());
+
+  const RunnerCallResult first_run = runner.run();
+  assert(first_run.succeeded());
+  assert(runner.status().lifecycle_state == LifecycleState::kActive);
+  assert(egress.publish_count() == 1);
+
+  const RunnerCallResult no_fresh_run = runner.run();
+  assert(no_fresh_run.succeeded());
+  assert(no_fresh_run.status == RunnerCallStatus::kDegraded);
+  assert(no_fresh_run.detail == "g1 low-level state not yet available after read retries");
+  assert(runner.status().lifecycle_state == LifecycleState::kActive);
+  assert(!runner.status().fail_stop_active);
+  assert(!runner.status().latched_fault.has_value());
+  assert(egress.publish_count() == 1);
+
+  const RunnerCallResult resumed_run = runner.run();
+  assert(resumed_run.succeeded());
+  assert(runner.status().lifecycle_state == LifecycleState::kActive);
+  assert(!runner.status().fail_stop_active);
+  assert(egress.publish_count() == 2);
+
+  const RunnerCallResult shutdown = runner.shutdown();
+  assert(shutdown.succeeded());
+}
+
 void TestObservationHookSeesPublishedStateAndEffectiveCommand() {
   FakeRobotSdkAdapter adapter({MakeState(1, 100, 100)});
   FakeCommandIngress ingress;
@@ -642,6 +693,82 @@ void TestFreshGamepadRemoteOverlaysPublishedWirelessRemote() {
   assert(gamepad_remote.stop_count() == 1);
 }
 
+void TestRunnerAnnotatesPublishTimingBreakdown() {
+  StateFrame state = MakeState(1, 100, 100);
+  state.receive_time_ns = 10;
+  state.read_start_time_ns = 20;
+  state.read_complete_time_ns = 30;
+  state.lowstate_callback_store_duration_ns = 5;
+  state.read_snapshot_duration_ns = 6;
+  state.stateframe_build_duration_ns = 7;
+  FakeRobotSdkAdapter adapter({state});
+  FakeCommandIngress ingress;
+  FakeStateEgress egress;
+  BridgeRunner runner(MakeConfig(), {.adapter = &adapter,
+                                     .command_ingress = &ingress,
+                                     .state_egress = &egress});
+
+  assert(runner.initialize().succeeded());
+  assert(runner.run().succeeded());
+  assert(egress.publish_count() == 1);
+
+  const StateFrame& published = egress.published_states().front();
+  assert(published.publish_start_time_ns != 0);
+  assert(published.lowstate_translate_duration_ns == 11'000U);
+  assert(published.dds_write_duration_ns == 22'000U);
+}
+
+void TestForwardingLogDisabledSkipsRunnerTelemetry() {
+  std::remove("logs/g1_forwarding.log");
+  std::remove("logs/g1_forwarding.1.log");
+  std::remove("logs/g1_forwarding.2.log");
+  std::remove("logs/g1_forwarding.3.log");
+
+  StateFrame state = MakeState(1, 100, 100);
+  state.receive_time_ns = 10;
+  state.read_start_time_ns = 20;
+  state.read_complete_time_ns = 30;
+  FakeRobotSdkAdapter adapter({state});
+  FakeCommandIngress ingress;
+  FakeStateEgress egress;
+  BridgeRunnerConfig config = MakeConfig();
+  config.forwarding_log_enabled = false;
+  BridgeRunner runner(config, {.adapter = &adapter,
+                               .command_ingress = &ingress,
+                               .state_egress = &egress});
+
+  assert(runner.initialize().succeeded());
+  assert(runner.run().succeeded());
+  bridge::observability::forwarding_logger()->flush();
+
+  std::ifstream log("logs/g1_forwarding.log");
+  const std::string output((std::istreambuf_iterator<char>(log)),
+                           std::istreambuf_iterator<char>());
+  assert(output.find("[g1_state_forward]") == std::string::npos);
+  assert(output.find("[g1_latency_breakdown]") == std::string::npos);
+}
+
+void TestStateAvailableNotificationWakesEventWaiter() {
+  FakeRobotSdkAdapter adapter({MakeState(1, 100, 100)});
+  FakeCommandIngress ingress;
+  FakeStateEgress egress;
+  BridgeRunner runner(MakeConfig(), {.adapter = &adapter,
+                                     .command_ingress = &ingress,
+                                     .state_egress = &egress});
+
+  bool woke = false;
+  std::thread waiter([&]() {
+    woke = runner.wait_for_state_available_until(
+        std::chrono::steady_clock::now() + std::chrono::seconds(1));
+  });
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  assert(!woke);
+  runner.notify_state_available();
+  waiter.join();
+  assert(woke);
+}
+
 }
 
 int main() {
@@ -649,7 +776,11 @@ int main() {
   TestStaleCommandTriggersFailStop();
   TestWaitingForInitialStateDoesNotFailStopRunner();
   TestRobotStateUnavailableSkipsPublishAndResumesWithoutFailStop();
+  TestG1NoFreshLowStateSkipsPublishAndResumesWithoutFailStop();
   TestObservationHookSeesPublishedStateAndEffectiveCommand();
   TestFreshGamepadRemoteOverlaysPublishedWirelessRemote();
+  TestRunnerAnnotatesPublishTimingBreakdown();
+  TestForwardingLogDisabledSkipsRunnerTelemetry();
+  TestStateAvailableNotificationWakesEventWaiter();
   return 0;
 }

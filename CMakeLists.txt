@@ -441,6 +441,22 @@ if(BUILD_ROBOT_UNITREE_G1)
     PASS_REGULAR_EXPRESSION "Prints received LowState frequency"
   )
 
+  add_executable(lowstate_field_recorder
+    demo/lowstate_field_recorder.cpp
+  )
+  target_link_libraries(lowstate_field_recorder PRIVATE
+    bridge_cyclonedds_options
+    bridge_config
+  )
+  set_target_properties(lowstate_field_recorder PROPERTIES
+    BUILD_RPATH "${BRIDGE_CYCLONE_LIB_DIR}"
+  )
+  add_dependencies(lowstate_field_recorder unitree_sdk2_nomain)
+  add_test(NAME lowstate_field_recorder_help_test COMMAND lowstate_field_recorder --help)
+  set_tests_properties(lowstate_field_recorder_help_test PROPERTIES
+    PASS_REGULAR_EXPRESSION "Records Unitree LowState fields before and after forwarding"
+  )
+
   add_executable(gamepad_dds_receiver
     demo/gamepad_dds_receiver.cpp
   )

@@ -29,6 +29,7 @@ struct SessionConfig {
   std::uint64_t write_timeout_ns{0};
   bool require_motion_release{true};
   bool verify_low_state_crc{false};
+  bool forwarding_log_enabled{true};
 };
 
 struct SafetyConfig {
@@ -67,6 +68,7 @@ class UnitreeG1Adapter final : public bridge::core::RobotSdkAdapter {
 
   [[nodiscard]] const UnitreeG1AdapterConfig& config() const noexcept;
 
+  void set_runtime_event_sink(bridge::core::BridgeRuntimeEventSink* event_sink) override;
   bridge::core::AdapterCallResult initialize() override;
   [[nodiscard]] bridge::core::AdapterReadResult read_state() override;
   bridge::core::AdapterCallResult write_command(

@@ -41,7 +41,9 @@ struct LowLevelSessionConfig {
   std::uint64_t stale_state_after_ns{0};
   bool require_motion_release{true};
   bool verify_low_state_crc{false};
+  bool forwarding_log_enabled{true};
   std::size_t hardware_slot_count{0};
+  std::function<void()> state_available_callback;
   std::function<int32_t(std::string&, std::string&)> check_mode_hook;
   std::function<int32_t()> release_mode_hook;
 };
@@ -49,6 +51,13 @@ struct LowLevelSessionConfig {
 struct LowLevelSessionState {
   std::uint64_t sample_time_ns{0};
   std::uint64_t receive_time_ns{0};
+  std::uint64_t receive_generation{0};
+  std::uint64_t callback_store_duration_ns{0};
+  std::uint64_t read_start_time_ns{0};
+  std::uint64_t read_complete_time_ns{0};
+  std::uint64_t read_snapshot_duration_ns{0};
+  std::uint64_t stateframe_build_duration_ns{0};
+  std::uint64_t callback_drops{0};
   std::uint32_t tick{0};
   std::array<std::uint32_t, 2> low_state_version{1U, 0U};
   std::array<std::uint32_t, 4> low_state_reserve{};
@@ -86,6 +95,7 @@ class UnitreeG1LowLevelSession {
   ~UnitreeG1LowLevelSession();
 
   [[nodiscard]] const LowLevelSessionConfig& config() const noexcept;
+  void set_state_available_callback(std::function<void()> callback);
   [[nodiscard]] bridge::core::AdapterCallResult initialize();
   [[nodiscard]] LowLevelSessionReadResult read_state();
   void handle_low_state_message(const unitree_hg::msg::dds_::LowState_& state);
@@ -106,12 +116,14 @@ class UnitreeG1LowLevelSession {
   std::uint64_t command_time_ns_{0};
   std::atomic<bool> initialized_{false};
   std::atomic<bool> released_motion_{false};
-  std::atomic<bool> has_state_{false};
   std::atomic<bool> connection_alive_{false};
   std::atomic<std::uint8_t> mode_pr_{0};
   std::atomic<std::uint8_t> mode_machine_{0};
   std::uint64_t last_low_state_time_ns_{0};
   std::uint64_t last_low_state_receive_time_ns_{0};
+  std::uint64_t last_low_state_callback_store_duration_ns_{0};
+  std::uint64_t last_low_state_generation_{0};
+  std::uint64_t last_consumed_low_state_generation_{0};
   std::uint64_t last_read_time_ns_{0};
   std::uint64_t last_write_time_ns_{0};
   std::chrono::steady_clock::time_point last_low_state_receive_time_{};
@@ -121,6 +133,10 @@ class UnitreeG1LowLevelSession {
   bridge::observability::ForwardingStats lowstate_receive_stats_;
   bridge::observability::ForwardingStats state_read_stats_;
   bridge::observability::ForwardingStats command_write_stats_;
+  std::optional<bridge::observability::ForwardingStatsSnapshot>
+      pending_lowstate_receive_stats_;
+  std::atomic<std::uint64_t> dropped_lowstate_callback_updates_{0};
+  std::uint64_t last_logged_lowstate_callback_drops_{0};
   std::shared_ptr<unitree::robot::ChannelPublisher<unitree_hg::msg::dds_::LowCmd_>>
       lowcmd_publisher_;
   std::shared_ptr<unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowState_>>
@@ -129,13 +145,12 @@ class UnitreeG1LowLevelSession {
       imu_subscriber_;
   std::shared_ptr<unitree::robot::b2::MotionSwitcherClient> motion_switcher_client_;
 
-  void reader_loop();
-  std::thread reader_thread_;
-  std::atomic<bool> stop_reader_{false};
+  void drain_pending_lowstate_receive_log();
+  void handle_low_state_message(const unitree_hg::msg::dds_::LowState_& state,
+                                bool drop_if_state_lock_is_busy);
   mutable std::mutex command_mutex_;
   mutable std::mutex state_mutex_;
-  std::mutex state_buffer_mutex_;
-  std::optional<LowLevelSessionState> buffered_state_;
+  std::mutex telemetry_mutex_;
 };
 
 }  // namespace bridge::adapters::unitree_g1

@@ -74,6 +74,7 @@ struct RawBridgeConfig {
   std::optional<int> schema_version;
   std::optional<std::string> robot_name;
   std::optional<int> loop_rate_hz;
+  std::optional<std::string> lowstate_trigger;
   std::optional<int> stale_command_timeout_ms;
   std::optional<std::string> startup_idle_mode;
   std::optional<bool> require_first_valid_command;
@@ -92,6 +93,7 @@ struct RawBridgeConfig {
   std::optional<std::string> dds_status_topic;
   std::optional<bool> debug_print_state;
   std::optional<bool> debug_print_command;
+  std::optional<bool> debug_print_forwarding_log;
   std::optional<int> debug_print_rate_hz;
   std::optional<bool> gamepad_enabled;
   std::optional<std::string> gamepad_backend;
@@ -542,6 +544,8 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           assign_required<int>(&raw->loop_rate_hz, "bridge.loop_rate_hz",
                                key_value->second, issues,
                                BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "lowstate_trigger") {
+          raw->lowstate_trigger = key_value->second;
         } else if (key_value->first == "stale_command_timeout_ms") {
           assign_required<int>(&raw->stale_command_timeout_ms,
                                "bridge.stale_command_timeout_ms",
@@ -692,6 +696,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           assign_required<bool>(&raw->debug_print_command, "debug_print.cmd",
                                 key_value->second, issues,
                                 BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "forwarding_log") {
+          assign_required<bool>(&raw->debug_print_forwarding_log,
+                                "debug_print.forwarding_log", key_value->second,
+                                issues, BridgeConfigIssueCode::kInvalidValue);
         } else if (key_value->first == "rate_hz") {
           assign_required<int>(&raw->debug_print_rate_hz,
                                "debug_print.rate_hz", key_value->second,
@@ -1306,6 +1314,8 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   const std::string dds_status_topic = raw.dds_status_topic.value_or("");
   const bool debug_print_state = raw.debug_print_state.value_or(false);
   const bool debug_print_command = raw.debug_print_command.value_or(false);
+  const bool debug_print_forwarding_log =
+      raw.debug_print_forwarding_log.value_or(true);
   const int debug_print_rate_hz = raw.debug_print_rate_hz.value_or(0);
   const bool gamepad_enabled = raw.gamepad_enabled.value_or(false);
   const std::string gamepad_backend = raw.gamepad_backend.value_or("sdl");
@@ -1345,6 +1355,7 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
       raw.publish_degraded_state_while_faulted.value_or(true);
   const bool halt_command_writes_while_faulted =
       raw.halt_command_writes_while_faulted.value_or(true);
+  const std::string lowstate_trigger = raw.lowstate_trigger.value_or("fixed_rate");
 
   if (startup_idle_mode != "zero_torque") {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
@@ -1361,6 +1372,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   if (!halt_command_writes_while_faulted) {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "bridge.fault_policy.halt_command_writes_while_faulted must be true");
+  }
+  if (lowstate_trigger != "fixed_rate" && lowstate_trigger != "event") {
+    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+               "bridge.lowstate_trigger must be fixed_rate or event");
   }
 
   const std::optional<std::uint64_t> loop_period_ns = hz_to_period_ns(*raw.loop_rate_hz);
@@ -1482,6 +1497,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.source_path = file_path;
   config.robot_type = adapter_kind;
   config.runner.loop_period_ns = *loop_period_ns;
+  config.runner.lowstate_trigger = lowstate_trigger == "event"
+                                        ? core::LowStateTriggerMode::kEvent
+                                        : core::LowStateTriggerMode::kFixedRate;
+  config.runner.forwarding_log_enabled = debug_print_forwarding_log;
   config.runner.command_stale_timeout_ns = *stale_timeout_ns;
   config.runner.gamepad_poll_interval_ns = *gamepad_poll_interval_ns;
   config.runner.gamepad_stale_timeout_ns = *gamepad_stale_timeout_ns;
@@ -1491,6 +1510,7 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.dds.topics.status = dds_status_topic;
   config.debug_print.state = debug_print_state;
   config.debug_print.command = debug_print_command;
+  config.debug_print.forwarding_log = debug_print_forwarding_log;
   config.debug_print.rate_hz = static_cast<std::uint32_t>(debug_print_rate_hz);
   config.gamepad.enabled = gamepad_enabled;
   config.gamepad.backend = gamepad_backend;

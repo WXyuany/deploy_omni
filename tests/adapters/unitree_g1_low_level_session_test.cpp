@@ -187,12 +187,63 @@ void TestReadStateUsesInjectedLowStateCache() {
   assert(read.state->wireless_remote.at(39) == 40U);
 }
 
+void TestReadStateConsumesFreshLowStateOnce() {
+  UnitreeG1LowLevelSession session(MakeConfig());
+  assert(session.initialize().status == AdapterCallStatus::kOk);
+
+  LowState_ state;
+  FillLowState(state);
+  session.handle_low_state_message(state);
+
+  const auto first = session.read_state();
+  assert(first.result.status == AdapterCallStatus::kOk);
+  assert(first.state.has_value());
+  assert(first.state->receive_generation == 1U);
+
+  const auto second = session.read_state();
+  assert(second.result.status == AdapterCallStatus::kRetryableError);
+  assert(!second.state.has_value());
+
+  session.handle_low_state_message(state);
+  const auto third = session.read_state();
+  assert(third.result.status == AdapterCallStatus::kOk);
+  assert(third.state.has_value());
+  assert(third.state->receive_generation == 2U);
+}
+
+void TestReadStateSkipsBufferedOlderStateWhenNewerLowStateArrives() {
+  auto config = MakeConfig();
+  config.read_timeout_ns = 1'000'000;
+  config.stale_state_after_ns = 0;
+  UnitreeG1LowLevelSession session(config);
+  assert(session.initialize().status == AdapterCallStatus::kOk);
+
+  LowState_ first_state;
+  FillLowState(first_state);
+  first_state.tick(100U);
+  session.handle_low_state_message(first_state);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(3));
+
+  LowState_ second_state;
+  FillLowState(second_state);
+  second_state.tick(200U);
+  session.handle_low_state_message(second_state);
+
+  const auto read = session.read_state();
+  assert(read.result.status == AdapterCallStatus::kOk);
+  assert(read.state.has_value());
+  assert(read.state->receive_generation == 2U);
+  assert(read.state->tick == 200U);
+}
+
 void TestReadStateRequiresCachedLowState() {
   UnitreeG1LowLevelSession session(MakeConfig());
   assert(session.initialize().status == AdapterCallStatus::kOk);
 
   const auto read = session.read_state();
   assert(read.result.status == AdapterCallStatus::kRetryableError);
+  assert(read.result.detail == "waiting for rt/lowstate");
   assert(!read.state.has_value());
 }
 
@@ -214,6 +265,26 @@ void TestReadStateRetriesUntilLowStateArrives() {
   delayed_state.join();
   assert(read.result.status == AdapterCallStatus::kOk);
   assert(read.state.has_value());
+}
+
+void TestReadStateDoesNotBlockOnConsumedLowStateRetryInterval() {
+  auto config = MakeConfig();
+  config.read_retry_attempts = 1;
+  config.read_retry_interval_ns = 50'000'000;
+  UnitreeG1LowLevelSession session(config);
+  assert(session.initialize().status == AdapterCallStatus::kOk);
+
+  LowState_ state;
+  FillLowState(state);
+  session.handle_low_state_message(state);
+  assert(session.read_state().result.status == AdapterCallStatus::kOk);
+
+  const auto start = std::chrono::steady_clock::now();
+  const auto read = session.read_state();
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  assert(read.result.status == AdapterCallStatus::kRetryableError);
+  assert(!read.state.has_value());
+  assert(elapsed < std::chrono::milliseconds(10));
 }
 
 void TestExplicitImuTopicOverridesEmbeddedImu() {
@@ -303,6 +374,33 @@ void TestWriteCommandLogsOnlyAggregateTelemetry() {
   assert(output.find("[g1_cmd_sample]") == std::string::npos);
 }
 
+void TestForwardingLogDisabledSkipsSessionTelemetry() {
+  auto config = MakeConfig();
+  config.forwarding_log_enabled = false;
+  config.write_timeout_ns = 500'000'000ULL;
+  UnitreeG1LowLevelSession session(config);
+  assert(session.initialize().status == AdapterCallStatus::kOk);
+
+  std::remove("logs/g1_forwarding.log");
+  std::remove("logs/g1_forwarding.1.log");
+  std::remove("logs/g1_forwarding.2.log");
+  std::remove("logs/g1_forwarding.3.log");
+
+  auto command = MakeCommand();
+  command.sequence = static_cast<std::uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  assert(session.write_command(command).status == AdapterCallStatus::kOk);
+  assert(session.write_command(command).status == AdapterCallStatus::kOk);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  assert(session.write_command(command).status == AdapterCallStatus::kOk);
+  bridge::observability::forwarding_logger()->flush();
+
+  std::ifstream log("logs/g1_forwarding.log");
+  const std::string output((std::istreambuf_iterator<char>(log)),
+                           std::istreambuf_iterator<char>());
+  assert(output.find("[g1_cmd_forward]") == std::string::npos);
+}
+
 void TestReaderLoopSleepFollowsConfiguredReadPeriod() {
   assert(select_reader_loop_sleep_ns(2'000'000ULL) == 2'000'000ULL);
   assert(select_reader_loop_sleep_ns(1'000'000ULL) == 1'000'000ULL);
@@ -341,7 +439,7 @@ void TestInitializeFailsWhenMotionModeStaysActiveAfterReleaseAttempt() {
   assert(init.status == AdapterCallStatus::kRetryableError);
 }
 
-void TestReadStateReportsStaleWhenCachedStateAgesOut() {
+void TestReadStateDoesNotReturnCachedStateWhenItAgesOut() {
   auto config = MakeConfig();
   config.stale_state_after_ns = 30;
   UnitreeG1LowLevelSession session(config);
@@ -351,18 +449,12 @@ void TestReadStateReportsStaleWhenCachedStateAgesOut() {
   FillLowState(state);
   session.handle_low_state_message(state);
   assert(session.read_state().result.status == AdapterCallStatus::kOk);
-  session.handle_low_state_message(state);
 
   for (int i = 0; i < 10; ++i) {
     const auto read = session.read_state();
-    if (read.state.has_value() && read.state->stale) {
-      assert(read.result.status == AdapterCallStatus::kDegraded);
-      assert(read.state->degraded);
-      return;
-    }
+    assert(read.result.status == AdapterCallStatus::kRetryableError);
+    assert(!read.state.has_value());
   }
-
-  assert(false && "expected stale/degraded state after cached lowstate ages out");
 }
 
 void TestReadStateStopsReturningCachedLowStateAfterReceiveTimeout() {
@@ -396,20 +488,18 @@ void TestHealthReportsDegradedWhenCachedStateGoesStale() {
   FillLowState(state);
   session.handle_low_state_message(state);
   assert(session.read_state().result.status == AdapterCallStatus::kOk);
-  session.handle_low_state_message(state);
 
   for (int i = 0; i < 10; ++i) {
     const auto read = session.read_state();
-    if (read.state.has_value() && read.state->stale) {
-      const auto degraded_read = session.read_state();
-      assert(degraded_read.state.has_value());
-      assert(degraded_read.state->stale);
+    if (read.result.status == AdapterCallStatus::kRetryableError &&
+        !read.state.has_value()) {
       const auto health = session.health();
-      assert(health.state == bridge::core::HealthState::kDegraded);
-      assert(health.degraded);
-      assert(health.connection_alive);
-      assert(health.fault.has_value());
-      return;
+      if (health.degraded) {
+        assert(health.state == bridge::core::HealthState::kDegraded);
+        assert(health.connection_alive);
+        assert(health.fault.has_value());
+        return;
+      }
     }
   }
 
@@ -420,17 +510,21 @@ void TestHealthReportsDegradedWhenCachedStateGoesStale() {
 
 int main() {
   TestReadStateUsesInjectedLowStateCache();
+  TestReadStateConsumesFreshLowStateOnce();
+  TestReadStateSkipsBufferedOlderStateWhenNewerLowStateArrives();
   TestReadStateRequiresCachedLowState();
   TestReadStateRetriesUntilLowStateArrives();
+  TestReadStateDoesNotBlockOnConsumedLowStateRetryInterval();
   TestExplicitImuTopicOverridesEmbeddedImu();
   TestWriteCommandPacksLowCmdUsingCommandModeMachineAndMotorModes();
   TestWriteCommandLogsOnlyAggregateTelemetry();
+  TestForwardingLogDisabledSkipsSessionTelemetry();
   TestReaderLoopSleepFollowsConfiguredReadPeriod();
   TestInvalidCrcLowStateIsRejectedWhenVerificationEnabled();
   TestInitializeFailsWhenMotionReleaseCannotBeSatisfied();
   TestInitializeSucceedsWhenMotionReleaseCompletes();
   TestInitializeFailsWhenMotionModeStaysActiveAfterReleaseAttempt();
-  TestReadStateReportsStaleWhenCachedStateAgesOut();
+  TestReadStateDoesNotReturnCachedStateWhenItAgesOut();
   TestReadStateStopsReturningCachedLowStateAfterReceiveTimeout();
   TestHealthReportsDegradedWhenCachedStateGoesStale();
   return 0;

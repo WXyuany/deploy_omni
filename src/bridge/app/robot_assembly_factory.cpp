@@ -155,6 +155,7 @@ struct UnitreeG1AdapterConfigBuildResult {
       startup_config.adapter.startup.read_initial_state_timeout_ns;
   config.session.read_timeout_ns = startup_config.runner.loop_period_ns;
   config.session.write_timeout_ns = startup_config.runner.loop_period_ns;
+  config.session.forwarding_log_enabled = startup_config.debug_print.forwarding_log;
   config.safety.safe_command_supported =
       startup_config.runner.startup_idle_policy != core::StartupIdlePolicy::kNoCommandWrite &&
       startup_config.adapter.safety.allow_safe_command_during_shutdown &&
