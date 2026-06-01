@@ -210,6 +210,7 @@ void TestLoadsPm01SampleBridgeConfig() {
   const auto& config = *result.config;
   assert(config.source_path == "../config/pm01.sample.yaml");
   assert(config.robot_type == "pm01");
+  assert(config.runner.lowstate_trigger == LowStateTriggerMode::kEvent);
   assert(config.dds.topics.command == "rt/lowcmd");
   assert(config.dds.topics.state == "rt/lowstate");
   assert(config.adapter.kind == "pm01");

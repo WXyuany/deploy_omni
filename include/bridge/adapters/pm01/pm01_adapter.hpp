@@ -68,6 +68,7 @@ class Pm01Adapter final : public bridge::core::RobotSdkAdapter {
   [[nodiscard]] const Pm01AdapterConfig& config() const noexcept;
 
   bridge::core::AdapterCallResult initialize() override;
+  void set_runtime_event_sink(bridge::core::BridgeRuntimeEventSink* event_sink) override;
   [[nodiscard]] bridge::core::AdapterReadResult read_state() override;
   bridge::core::AdapterCallResult write_command(
       const bridge::core::CommandFrame& command) override;

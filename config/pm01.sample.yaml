@@ -3,6 +3,7 @@ schema_version: 1
 bridge:
   robot_name: pm01
   loop_rate_hz: 250
+  lowstate_trigger: event
   stale_command_timeout_ms: 120
   startup_idle_policy:
     mode: zero_torque

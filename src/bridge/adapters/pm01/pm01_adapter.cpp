@@ -1,7 +1,9 @@
 #include "../../../../include/bridge/adapters/pm01/pm01_adapter.hpp"
+#include "../../../../include/bridge/core/bridge_runner.hpp"
 #include "bridge/build_config.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
@@ -126,6 +128,10 @@ class Pm01Adapter::Impl {
 
   [[nodiscard]] const Pm01AdapterConfig& config() const noexcept {
     return config_;
+  }
+
+  void set_runtime_event_sink(bridge::core::BridgeRuntimeEventSink* event_sink) noexcept {
+    runtime_event_sink_.store(event_sink, std::memory_order_release);
   }
 
   [[nodiscard]] bridge::core::AdapterCallResult initialize() {
@@ -473,8 +479,14 @@ class Pm01Adapter::Impl {
           if (!has_expected_joint_layout(*msg)) {
             return;
           }
-          std::lock_guard<std::mutex> lock(ros_mutex_);
-          latest_joint_state_ = msg;
+          {
+            std::lock_guard<std::mutex> lock(ros_mutex_);
+            latest_joint_state_ = msg;
+          }
+          if (auto* const event_sink =
+                  runtime_event_sink_.load(std::memory_order_acquire)) {
+            event_sink->notify_state_available();
+          }
         });
     imu_sub_ = ros_node_->create_subscription<interface_protocol::msg::ImuInfo>(
         "/hardware/imu_info", qos,
@@ -1076,6 +1088,7 @@ class Pm01Adapter::Impl {
   bool connection_alive_{false};
   bool has_read_state_{false};
   bool deterministic_state_available_{false};
+  std::atomic<bridge::core::BridgeRuntimeEventSink*> runtime_event_sink_{nullptr};
   bridge::core::LifecycleState lifecycle_state_{bridge::core::LifecycleState::kCreated};
   DeterministicVendorSession vendor_session_;
 #if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
@@ -1118,6 +1131,11 @@ const Pm01AdapterConfig& Pm01Adapter::config() const noexcept {
 
 bridge::core::AdapterCallResult Pm01Adapter::initialize() {
   return impl_->initialize();
+}
+
+void Pm01Adapter::set_runtime_event_sink(
+    bridge::core::BridgeRuntimeEventSink* event_sink) {
+  impl_->set_runtime_event_sink(event_sink);
 }
 
 bridge::core::AdapterReadResult Pm01Adapter::read_state() {
