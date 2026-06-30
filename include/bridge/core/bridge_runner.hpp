@@ -37,12 +37,6 @@ struct RunnerCallResult {
   }
 };
 
-enum class StartupIdlePolicy {
-  kRequireSafeCommand,
-  kPreferSafeCommand,
-  kNoCommandWrite,
-};
-
 enum class LowStateTriggerMode {
   kFixedRate,
   kEvent,
@@ -52,7 +46,6 @@ struct BridgeRunnerFaultPolicy {
   bool fail_stop_on_transport_fault{true};
   bool fail_stop_on_command_stale{true};
   bool fail_stop_on_adapter_degraded{false};
-  bool write_safe_command_on_fault{true};
   bool continue_publishing_in_fault{true};
 };
 
@@ -63,7 +56,6 @@ struct BridgeRunnerConfig {
   std::uint64_t command_stale_timeout_ns{0};
   std::uint64_t gamepad_poll_interval_ns{0};
   std::uint64_t gamepad_stale_timeout_ns{0};
-  StartupIdlePolicy startup_idle_policy{StartupIdlePolicy::kPreferSafeCommand};
   BridgeRunnerFaultPolicy fault_policy;
 };
 
@@ -82,7 +74,6 @@ struct BridgeRunnerStatus {
   bool stop_requested{false};
   bool first_state_received{false};
   bool first_command_received{false};
-  bool startup_idle_active{true};
   bool command_stale{false};
   bool fail_stop_active{false};
   bool degraded{false};

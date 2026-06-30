@@ -18,8 +18,6 @@ inline constexpr std::size_t kPm01DdsMotorCount{35};
 
 struct SessionConfig {
   std::string robot_id;
-  // 这是一个复合名称：前缀是通信方式，后缀是机器人类型。
-  std::string transport_endpoint;
   std::string control_profile;
   std::uint64_t initialize_timeout_ns{0};
   std::uint64_t read_timeout_ns{0};
@@ -27,7 +25,6 @@ struct SessionConfig {
 };
 
 struct SafetyConfig {
-  bool safe_command_supported{true};
   bool require_initial_state_before_motion{true};
 };
 
@@ -41,7 +38,6 @@ struct Pm01AdapterConfig {
   SessionConfig session;
   SafetyConfig safety;
   MotionStateConfig motion_state;
-  std::string backend;
   bool publish_default_imu_when_missing{true};
   std::vector<std::string> joint_names;
   std::vector<std::int64_t> dds_joint_indices;
@@ -72,7 +68,6 @@ class Pm01Adapter final : public bridge::core::RobotSdkAdapter {
   [[nodiscard]] bridge::core::AdapterReadResult read_state() override;
   bridge::core::AdapterCallResult write_command(
       const bridge::core::CommandFrame& command) override;
-  bridge::core::AdapterCallResult write_safe_command() override;
   [[nodiscard]] bridge::core::AdapterHealthResult query_health() const override;
   bridge::core::AdapterCallResult shutdown() override;
 

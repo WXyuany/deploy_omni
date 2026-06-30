@@ -1,5 +1,6 @@
 #include <cassert>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "../../include/bridge/core/robot_sdk_adapter.hpp"
@@ -22,6 +23,27 @@ using bridge::core::JointStateBlock;
 using bridge::core::LifecycleState;
 using bridge::core::RobotSdkAdapter;
 using bridge::core::StateFrame;
+
+template <typename Adapter, typename = void>
+struct HasWriteSafeCommand : std::false_type {};
+
+template <typename Adapter>
+struct HasWriteSafeCommand<
+    Adapter,
+    std::void_t<decltype(std::declval<Adapter&>().write_safe_command())>>
+    : std::true_type {};
+
+template <typename Health, typename = void>
+struct HasSafeCommandSupported : std::false_type {};
+
+template <typename Health>
+struct HasSafeCommandSupported<
+    Health,
+    std::void_t<decltype(std::declval<Health&>().safe_command_supported)>>
+    : std::true_type {};
+
+static_assert(!HasWriteSafeCommand<RobotSdkAdapter>::value);
+static_assert(!HasSafeCommandSupported<AdapterHealth>::value);
 
 class FakeRobotSdkAdapter final : public RobotSdkAdapter {
  public:
@@ -73,15 +95,9 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
     return {.status = AdapterCallStatus::kOk, .detail = "write"};
   }
 
-  AdapterCallResult write_safe_command() override {
-    safe_command_count_ += 1;
-    return {.status = AdapterCallStatus::kOk, .detail = "safe"};
-  }
-
   [[nodiscard]] AdapterHealthResult query_health() const override {
     AdapterHealth health;
     health.state = initialized_ ? HealthState::kHealthy : HealthState::kUnknown;
-    health.safe_command_supported = true;
     health.connection_alive = initialized_;
     health.degraded = false;
     health.last_write_time_ns = last_command_.receive_time_ns;
@@ -97,17 +113,12 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
     return {.status = AdapterCallStatus::kOk, .detail = "shutdown"};
   }
 
-  [[nodiscard]] int safe_command_count() const noexcept {
-    return safe_command_count_;
-  }
-
   [[nodiscard]] const CommandFrame& last_command() const noexcept {
     return last_command_;
   }
 
  private:
   bool initialized_{false};
-  int safe_command_count_{0};
   CommandFrame last_command_{};
 };
 
@@ -158,14 +169,9 @@ int main() {
   assert(read.state->imu.has_value());
   assert(read.state->lifecycle_state == LifecycleState::kActive);
 
-  const AdapterCallResult safe = adapter.write_safe_command();
-  assert(safe.succeeded());
-  assert(adapter.safe_command_count() == 1);
-
   const AdapterHealthResult health = adapter.query_health();
   assert(health.result.succeeded());
   assert(health.health.state == HealthState::kHealthy);
-  assert(health.health.safe_command_supported);
 
   const BridgeFault fault = MakeFault();
   assert(fault.has_fault());

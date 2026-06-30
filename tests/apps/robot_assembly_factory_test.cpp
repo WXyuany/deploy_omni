@@ -56,6 +56,22 @@ std::string WriteSampleConfigWithGamepadEnabled(const std::string& relative_path
   return output_path;
 }
 
+std::string WriteSampleConfigWithAssemblyGamepadModule(
+    const std::string& relative_path,
+    const std::string& output_path) {
+  std::ifstream input(SamplePath(relative_path));
+  std::ofstream output(output_path);
+  output << input.rdbuf();
+  output << "assembly:\n"
+         << "  modules:\n"
+         << "    - name: gamepad\n"
+         << "      type: sdl\n"
+         << "      enabled: true\n"
+         << "      controller_index: 0\n"
+         << "      mapping_path: docs/joy_stick/include/hardware/gamecontrollerdb.txt\n";
+  return output_path;
+}
+
 std::string WritePm01Config(const std::string& path) {
   static const std::vector<std::string> kJointNames{
       "l_hip_yaw",       "l_hip_roll",      "l_hip_pitch",
@@ -74,13 +90,8 @@ std::string WritePm01Config(const std::string& path) {
       << "  robot_name: pm01\n"
       << "  loop_rate_hz: 250\n"
       << "  stale_command_timeout_ms: 120\n"
-      << "  startup_idle_policy:\n"
-      << "    mode: zero_torque\n"
-      << "    require_first_valid_command: true\n"
-      << "    use_adapter_safe_command: true\n"
       << "  fault_policy:\n"
       << "    mode: fail_stop\n"
-      << "    send_safe_command_on_fault: true\n"
       << "    publish_degraded_state_while_faulted: true\n"
       << "    halt_command_writes_while_faulted: true\n"
       << "dds:\n"
@@ -95,14 +106,10 @@ std::string WritePm01Config(const std::string& path) {
       << "  robot_model: pm01\n"
       << "  command_mode: joint_bridge\n"
       << "  connection:\n"
-      << "    transport: dds\n"
-      << "    interface_hint: pm01\n"
+      << "    transport: ros2\n"
       << "  startup:\n"
       << "    read_initial_state_timeout_ms: 1000\n"
       << "    require_healthy_hardware: true\n"
-      << "  safety:\n"
-      << "    safe_command_profile: zero_torque\n"
-      << "    allow_safe_command_during_shutdown: true\n"
       << "joint_mapping:\n"
       << "  validation:\n"
       << "    expected_sim_joint_count: 24\n"
@@ -136,6 +143,20 @@ std::string WritePm01Config(const std::string& path) {
   return path;
 }
 
+std::string WritePm01ConfigWithoutAdapterKind(const std::string& path) {
+  const std::string source_path = WritePm01Config(path + ".source");
+  std::ifstream input(source_path);
+  std::ofstream output(path);
+  std::string line;
+  while (std::getline(input, line)) {
+    if (line == "  kind: pm01") {
+      continue;
+    }
+    output << line << '\n';
+  }
+  return path;
+}
+
 void TestCreatesKeplerAssemblyFromSampleConfig() {
 #if BRIDGE_BUILD_KEPLER_K2
   const bridge::config::BridgeConfigLoadResult loaded = LoadSampleConfig();
@@ -163,7 +184,7 @@ void TestCreatesKeplerAssemblyFromSampleConfig() {
 
 void TestCreatesGamepadRemoteWhenEnabled() {
 #if BRIDGE_BUILD_KEPLER_K2 && BRIDGE_BUILD_GAMEPAD_SDL
-  const std::string path = WriteSampleConfigWithGamepadEnabled(
+  const std::string path = WriteSampleConfigWithAssemblyGamepadModule(
       "config/kepler_k2.sample.yaml", "kepler_gamepad_enabled_test.yaml");
   bridge::config::BridgeConfigLoadResult loaded =
       bridge::config::load_bridge_config(path);
@@ -182,7 +203,7 @@ void TestCreatesGamepadRemoteWhenEnabled() {
 
 void TestCreatesPm01GamepadRemoteWhenConfigEnabled() {
 #if BRIDGE_BUILD_PM01 && BRIDGE_BUILD_GAMEPAD_SDL
-  const std::string path = WriteSampleConfigWithGamepadEnabled(
+  const std::string path = WriteSampleConfigWithAssemblyGamepadModule(
       "config/pm01.sample.yaml", "pm01_gamepad_enabled_test.yaml");
   const bridge::config::BridgeConfigLoadResult loaded =
       bridge::config::load_bridge_config(path);
@@ -240,33 +261,6 @@ void TestCreatesPm01AssemblyFromConfig() {
 #endif
 }
 
-void TestPm01AssemblyPropagatesBackendField() {
-#if BRIDGE_BUILD_PM01
-  const std::string path = WritePm01Config("pm01_robot_assembly_backend_test.yaml");
-  {
-    std::ofstream output(path, std::ios::app);
-    output << "adapter:\n"
-           << "  backend: ros2\n";
-  }
-
-  const bridge::config::BridgeConfigLoadResult loaded =
-      bridge::config::load_bridge_config(path);
-  assert(loaded.succeeded());
-  assert(loaded.config.has_value());
-
-  bridge::app::RobotAssemblyCreateResult assembled =
-      bridge::app::create_robot_assembly(*loaded.config);
-  assert(assembled.succeeded());
-  assert(assembled.assembly.has_value());
-  assert(assembled.assembly->adapter != nullptr);
-
-  const auto* pm01 = dynamic_cast<bridge::adapters::pm01::Pm01Adapter*>(
-      assembled.assembly->adapter.get());
-  assert(pm01 != nullptr);
-  assert(pm01->config().backend == "ros2");
-#endif
-}
-
 void TestPm01AssemblyPropagatesMotionStateConfig() {
 #if BRIDGE_BUILD_PM01
   const std::string path = WritePm01Config("pm01_robot_assembly_motion_state_test.yaml");
@@ -300,6 +294,59 @@ void TestPm01AssemblyPropagatesMotionStateConfig() {
 #endif
 }
 
+void TestAssemblyCanDisableDdsIngressAndEgress() {
+#if BRIDGE_BUILD_PM01
+  const std::string path = WritePm01Config("pm01_robot_assembly_components_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "assembly:\n"
+           << "  command_ingress:\n"
+           << "    enabled: false\n"
+           << "    type: none\n"
+           << "  state_egress:\n"
+           << "    enabled: false\n"
+           << "    type: none\n";
+  }
+
+  const bridge::config::BridgeConfigLoadResult loaded =
+      bridge::config::load_bridge_config(path);
+  assert(loaded.succeeded());
+  assert(loaded.config.has_value());
+
+  bridge::app::RobotAssemblyCreateResult assembled =
+      bridge::app::create_robot_assembly(*loaded.config);
+  assert(assembled.succeeded());
+  assert(assembled.assembly.has_value());
+  assert(assembled.assembly->adapter != nullptr);
+  assert(assembled.assembly->command_ingress != nullptr);
+  assert(assembled.assembly->state_egress != nullptr);
+#endif
+}
+
+void TestAssemblyProfileCreatesPm01AdapterWithoutAdapterKind() {
+#if BRIDGE_BUILD_PM01
+  const std::string path = WritePm01ConfigWithoutAdapterKind(
+      "pm01_robot_assembly_profile_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "assembly:\n"
+           << "  profile: pm01\n";
+  }
+
+  const bridge::config::BridgeConfigLoadResult loaded =
+      bridge::config::load_bridge_config(path);
+  assert(loaded.succeeded());
+  assert(loaded.config.has_value());
+
+  bridge::app::RobotAssemblyCreateResult assembled =
+      bridge::app::create_robot_assembly(*loaded.config);
+  assert(assembled.succeeded());
+  assert(assembled.assembly.has_value());
+  assert(assembled.assembly->adapter != nullptr);
+  assert(assembled.assembly->adapter->name() == std::string_view{"pm01"});
+#endif
+}
+
 void TestRegisteredRobotTypesIncludesKeplerK2() {
   const std::vector<std::string_view> types =
       bridge::app::registered_robot_types();
@@ -322,7 +369,8 @@ int main() {
   TestRegisteredRobotTypesIncludesKeplerK2();
   TestRegisteredRobotTypesIncludesPm01();
   TestCreatesPm01AssemblyFromConfig();
-  TestPm01AssemblyPropagatesBackendField();
   TestPm01AssemblyPropagatesMotionStateConfig();
+  TestAssemblyCanDisableDdsIngressAndEgress();
+  TestAssemblyProfileCreatesPm01AdapterWithoutAdapterKind();
   return 0;
 }

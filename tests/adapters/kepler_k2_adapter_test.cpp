@@ -68,22 +68,6 @@ void TestConfigValidationFailsWhenImuRequiredWithoutConfig() {
   assert(health.health.fault->category == FaultCategory::kConfiguration);
 }
 
-void TestSafeCommandUnsupportedReportsCapability() {
-  KeplerK2AdapterConfig config = MakeBaseConfig();
-  config.safety.safe_command_supported = false;
-
-  KeplerK2Adapter adapter(config);
-  assert(adapter.initialize().status == AdapterCallStatus::kOk);
-
-  const auto safe = adapter.write_safe_command();
-  assert(safe.status == AdapterCallStatus::kUnsupported);
-
-  const auto health = adapter.query_health();
-  assert(health.result.status == AdapterCallStatus::kOk);
-  assert(!health.health.safe_command_supported);
-  assert(health.health.connection_alive);
-}
-
 void TestInitialStateIsRequiredBeforeMotion() {
   KeplerK2Adapter adapter(MakeBaseConfig());
   assert(adapter.initialize().status == AdapterCallStatus::kOk);
@@ -223,7 +207,6 @@ void TestRepeatedWritesRecomputeEffortFromLatestState() {
 
 int main() {
   TestConfigValidationFailsWhenImuRequiredWithoutConfig();
-  TestSafeCommandUnsupportedReportsCapability();
   TestInitialStateIsRequiredBeforeMotion();
   TestImuGuardAppliesOnlyToMotionCommands();
   TestRequiredSharedMemoryImuSurfacesDegradedHealth();

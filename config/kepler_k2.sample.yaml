@@ -10,14 +10,25 @@ debug_print:
   cmd: false
   rate_hz: 2
 
-gamepad:
-  enabled: false
-  backend: sdl
-  controller_index: 0
-  mapping_path: docs/joy_stick/include/hardware/gamecontrollerdb.txt
-  poll_interval_ms: 5
-  stale_timeout_ms: 100
+assembly:
+  profile: kepler_k2
+  adapter:
+    type: kepler_k2
+  command_ingress:
+    enabled: true
+    type: dds
+  state_egress:
+    enabled: true
+    type: dds
 
+  modules:
+    - name: gamepad
+      enabled: false
+      type: sdl
+      controller_index: 0
+      mapping_path: docs/joy_stick/include/hardware/gamecontrollerdb.txt
+      poll_interval_ms: 5
+      stale_timeout_ms: 100
 joints:
   - { index: 0,  enable: true,  sign: 1.0, offset: 0.0 }
   - { index: 1,  enable: true,  sign: 1.0, offset: 0.0 }

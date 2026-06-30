@@ -32,7 +32,6 @@ using bridge::core::HealthState;
 using bridge::core::LifecycleState;
 using bridge::core::RobotSdkAdapter;
 using bridge::core::RunnerCallStatus;
-using bridge::core::StartupIdlePolicy;
 using bridge::core::StateFrame;
 using bridge::dds::CommandTranslation;
 using bridge::dds::DdsCommandIngressDependencies;
@@ -165,11 +164,8 @@ bridge::config::BridgeStartupConfig MakeStartupConfig() {
   config.adapter.connection.interface_hint = "robot_lan0";
   config.adapter.startup.read_initial_state_timeout_ns = 1'000'000'000U;
   config.adapter.startup.require_healthy_hardware = true;
-  config.adapter.safety.safe_command_profile = "zero_torque";
-  config.adapter.safety.allow_safe_command_during_shutdown = true;
   config.runner.loop_period_ns = 4'000'000U;
   config.runner.command_stale_timeout_ns = 120'000'000U;
-  config.runner.startup_idle_policy = StartupIdlePolicy::kPreferSafeCommand;
   return config;
 }
 

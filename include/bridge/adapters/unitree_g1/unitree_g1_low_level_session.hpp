@@ -106,7 +106,6 @@ class UnitreeG1LowLevelSession {
       const noexcept;
   [[nodiscard]] bridge::core::AdapterCallResult write_command(
       const bridge::core::CommandFrame& command);
-  [[nodiscard]] bridge::core::AdapterCallResult write_safe_command();
   [[nodiscard]] bridge::core::AdapterHealth health() const;
   [[nodiscard]] bridge::core::AdapterCallResult shutdown();
 

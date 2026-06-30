@@ -609,36 +609,6 @@ bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_command(
   };
 }
 
-bridge::core::AdapterCallResult UnitreeG1LowLevelSession::write_safe_command() {
-  std::lock_guard<std::mutex> lock(command_mutex_);
-  if (!initialized_.load()) {
-    return {
-        .status = bridge::core::AdapterCallStatus::kRetryableError,
-        .detail = "g1 low-level session must be initialized before safe command",
-        .fault = make_fault(bridge::core::FaultCategory::kSafety,
-                            bridge::core::FaultSeverity::kRecoverable,
-                            bridge::core::LifecycleState::kCreated,
-                            "g1 low-level session must be initialized before safe command",
-                            0, command_time_ns_),
-    };
-  }
-
-  command_time_ns_ += tick_or_default(config_.write_timeout_ns);
-  last_write_time_ns_ = command_time_ns_;
-  mode_pr_.store(0);
-  last_packed_command_ = build_safe_low_cmd(config_.hardware_slot_count, mode_machine_.load());
-
-  if (lowcmd_publisher_ && last_packed_command_.has_value()) {
-    connection_alive_ = lowcmd_publisher_->Write(*last_packed_command_);
-  }
-
-  return {
-      .status = bridge::core::AdapterCallStatus::kOk,
-      .detail = "g1 low-level safe command written",
-      .fault = std::nullopt,
-  };
-}
-
 bridge::core::AdapterHealth UnitreeG1LowLevelSession::health() const {
   std::uint64_t state_time_ns = 0;
   std::uint64_t last_low_state_time_ns = 0;
@@ -660,7 +630,6 @@ bridge::core::AdapterHealth UnitreeG1LowLevelSession::health() const {
       .state = !connection_alive_ ? bridge::core::HealthState::kUnknown
                                   : stale ? bridge::core::HealthState::kDegraded
                                           : bridge::core::HealthState::kHealthy,
-      .safe_command_supported = true,
       .connection_alive = connection_alive_,
       .degraded = stale,
       .last_read_time_ns = last_read_time_ns,

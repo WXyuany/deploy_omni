@@ -1,6 +1,5 @@
 #include "../../../../include/bridge/adapters/kepler_k2/kepler_k2_adapter.hpp"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -245,36 +244,6 @@ class KeplerK2Adapter::Impl {
     return make_status_result(status, write_detail(command), persistent_fault_);
   }
 
-  [[nodiscard]] bridge::core::AdapterCallResult write_safe_command() {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    if (!config_.safety.safe_command_supported) {
-      return {
-          .status = bridge::core::AdapterCallStatus::kUnsupported,
-          .detail = "safe command is disabled by adapter config",
-          .fault = std::nullopt,
-      };
-    }
-
-    if (const auto availability = ensure_session_available_locked(
-            bridge::core::FaultCategory::kSafety,
-            "adapter must be initialized before safe command write");
-        !availability.succeeded()) {
-      return availability;
-    }
-
-    synthetic_time_ns_ += tick_or_default(config_.session.write_timeout_ns);
-    last_write_time_ns_ = synthetic_time_ns_;
-    ////// 写入机器人安全指令：这里当前还是 deterministic session 占位
-    ////// 写入机器人安全指令：未来应该调用真实 K2 底层接口发送 safe command
-    vendor_session_.apply_safe_command();
-    persistent_fault_ = persistent_runtime_fault_locked();
-
-    return make_status_result(current_operational_status(),
-                              "deterministic safe command applied",
-                              persistent_fault_);
-  }
-
   [[nodiscard]] bridge::core::AdapterHealthResult query_health() const {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -283,7 +252,6 @@ class KeplerK2Adapter::Impl {
                                        health_detail_locked(),
                                        persistent_runtime_fault_locked());
     result.health.state = health_state_locked();
-    result.health.safe_command_supported = config_.safety.safe_command_supported;
     result.health.connection_alive = connection_alive_;
     result.health.degraded = is_persistently_degraded_locked();
     result.health.last_read_time_ns = last_read_time_ns_;
@@ -356,14 +324,6 @@ class KeplerK2Adapter::Impl {
         velocity_[index] += effort_[index] * 0.1;
         position_[index] += velocity_[index] * 0.1;
       }
-    }
-
-    void apply_safe_command() {
-      std::fill(velocity_.begin(), velocity_.end(), 0.0);
-      std::fill(effort_.begin(), effort_.end(), 0.0);
-      std::fill(acceleration_.begin(), acceleration_.end(), 0.0);
-      set_active_mode(bridge::core::ControlMode::kSafeIdle,
-                      control_mode_label(bridge::core::ControlMode::kSafeIdle));
     }
 
     void reset() {
@@ -760,10 +720,6 @@ bridge::core::AdapterReadResult KeplerK2Adapter::read_state() {
 bridge::core::AdapterCallResult KeplerK2Adapter::write_command(
     const bridge::core::CommandFrame& command) {
   return impl_->write_command(command);
-}
-
-bridge::core::AdapterCallResult KeplerK2Adapter::write_safe_command() {
-  return impl_->write_safe_command();
 }
 
 bridge::core::AdapterHealthResult KeplerK2Adapter::query_health() const {

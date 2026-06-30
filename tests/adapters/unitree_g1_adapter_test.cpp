@@ -1,7 +1,4 @@
 #include <cassert>
-#include <atomic>
-#include <chrono>
-#include <thread>
 
 #include "../../include/bridge/adapters/unitree_g1/unitree_g1_adapter.hpp"
 
@@ -87,35 +84,6 @@ void TestReadStateRequiresRealSessionState() {
   assert(!read.state.has_value());
 }
 
-void TestSafeCommandWriteDoesNotWaitForStateReadRetry() {
-  auto config = MakeBaseConfig();
-  config.session.read_retry_attempts = 1;
-  config.session.read_retry_interval_ns = 200'000'000ULL;
-
-  UnitreeG1Adapter adapter(config);
-  assert(adapter.initialize().status == AdapterCallStatus::kOk);
-
-  std::atomic<bool> read_started{false};
-  std::thread read_thread([&adapter, &read_started] {
-    read_started.store(true);
-    [[maybe_unused]] const auto read = adapter.read_state();
-  });
-
-  while (!read_started.load()) {
-    std::this_thread::yield();
-  }
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-  const auto started = std::chrono::steady_clock::now();
-  const auto safe = adapter.write_safe_command();
-  const auto elapsed = std::chrono::steady_clock::now() - started;
-
-  read_thread.join();
-
-  assert(safe.status == AdapterCallStatus::kOk);
-  assert(elapsed < std::chrono::milliseconds(100));
-}
-
 void TestShutdownStopsFurtherAccess() {
   UnitreeG1Adapter adapter(MakeBaseConfig());
   assert(adapter.initialize().status == AdapterCallStatus::kOk);
@@ -131,7 +99,6 @@ void TestShutdownStopsFurtherAccess() {
 int main() {
   TestInitialStateIsRequiredBeforeMotion();
   TestReadStateRequiresRealSessionState();
-  TestSafeCommandWriteDoesNotWaitForStateReadRetry();
   TestShutdownStopsFurtherAccess();
   return 0;
 }

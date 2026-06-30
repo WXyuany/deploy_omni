@@ -1,6 +1,8 @@
 #include <cassert>
 #include <fstream>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "../../include/bridge/config/bridge_config.hpp"
@@ -13,6 +15,33 @@ using bridge::core::LowStateTriggerMode;
 using bridge::config::JointMap;
 using bridge::config::JointMapBuildResult;
 using bridge::config::load_bridge_config;
+
+template <typename Config, typename = void>
+struct HasPublicBackendField : std::false_type {};
+
+template <typename Config>
+struct HasPublicBackendField<Config, std::void_t<decltype(std::declval<Config&>().backend)>>
+    : std::true_type {};
+
+template <typename Config, typename = void>
+struct HasPublicSafetyField : std::false_type {};
+
+template <typename Config>
+struct HasPublicSafetyField<Config, std::void_t<decltype(std::declval<Config&>().safety)>>
+    : std::true_type {};
+
+template <typename Policy, typename = void>
+struct HasWriteSafeCommandOnFault : std::false_type {};
+
+template <typename Policy>
+struct HasWriteSafeCommandOnFault<
+    Policy,
+    std::void_t<decltype(std::declval<Policy&>().write_safe_command_on_fault)>>
+    : std::true_type {};
+
+static_assert(!HasPublicBackendField<bridge::config::RobotAdapterConfig>::value);
+static_assert(!HasPublicSafetyField<bridge::config::RobotAdapterConfig>::value);
+static_assert(!HasWriteSafeCommandOnFault<bridge::core::BridgeRunnerFaultPolicy>::value);
 
 bool HasIssueCode(const bridge::config::BridgeConfigLoadResult& result,
                   const BridgeConfigIssueCode code) {
@@ -42,13 +71,8 @@ std::string WritePm01Config(const std::string& path) {
       << "  robot_name: pm01\n"
       << "  loop_rate_hz: 250\n"
       << "  stale_command_timeout_ms: 120\n"
-      << "  startup_idle_policy:\n"
-      << "    mode: zero_torque\n"
-      << "    require_first_valid_command: true\n"
-      << "    use_adapter_safe_command: true\n"
       << "  fault_policy:\n"
       << "    mode: fail_stop\n"
-      << "    send_safe_command_on_fault: true\n"
       << "    publish_degraded_state_while_faulted: true\n"
       << "    halt_command_writes_while_faulted: true\n"
       << "dds:\n"
@@ -63,14 +87,10 @@ std::string WritePm01Config(const std::string& path) {
       << "  robot_model: pm01\n"
       << "  command_mode: joint_bridge\n"
       << "  connection:\n"
-      << "    transport: dds\n"
-      << "    interface_hint: pm01\n"
+      << "    transport: ros2\n"
       << "  startup:\n"
       << "    read_initial_state_timeout_ms: 1000\n"
       << "    require_healthy_hardware: true\n"
-      << "  safety:\n"
-      << "    safe_command_profile: zero_torque\n"
-      << "    allow_safe_command_during_shutdown: true\n"
       << "joint_mapping:\n"
       << "  validation:\n"
       << "    expected_sim_joint_count: 24\n"
@@ -101,6 +121,20 @@ std::string WritePm01Config(const std::string& path) {
            << "        position: {lower: -1.0, upper: 1.0}\n";
   }
 
+  return path;
+}
+
+std::string WritePm01ConfigWithoutAdapterKind(const std::string& path) {
+  const std::string source_path = WritePm01Config(path + ".source");
+  std::ifstream input(source_path);
+  std::ofstream output(path);
+  std::string line;
+  while (std::getline(input, line)) {
+    if (line == "  kind: pm01") {
+      continue;
+    }
+    output << line << '\n';
+  }
   return path;
 }
 
@@ -187,9 +221,7 @@ void TestLoadsSampleBridgeConfig() {
   assert(config.runner.gamepad_stale_timeout_ns == 100'000'000U);
   assert(config.adapter.startup.read_initial_state_timeout_ns == 1'000'000'000U);
   assert(config.adapter.startup.require_healthy_hardware);
-  assert(config.adapter.safety.safe_command_profile == "zero_torque");
-  assert(config.adapter.safety.allow_safe_command_during_shutdown);
-  assert(config.adapter.joint_names.size() == 12U);
+      assert(config.adapter.joint_names.size() == 12U);
   assert(config.adapter.joint_names.front().find("joint_") == 0 ||
         config.adapter.joint_names.front() == "l_hip_yaw");
   assert(config.adapter.joint_names.back().find("joint_") == 0 ||
@@ -218,7 +250,7 @@ void TestLoadsPm01SampleBridgeConfig() {
   assert(config.adapter.robot_model == "pm01");
   assert(config.adapter.command_mode == "joint_bridge");
   assert(config.adapter.connection.transport == "ros2");
-  assert(config.adapter.connection.interface_hint == "pm01");
+  assert(config.adapter.connection.interface_hint.empty());
   assert(!config.adapter.motion_state.required);
   assert(config.adapter.motion_state.required_task == "joint_bridge");
   assert(!config.adapter.motion_state.initial_task.has_value());
@@ -271,8 +303,7 @@ void TestLoadsUnitreeG1SampleBridgeConfig() {
          "docs/joy_stick/include/hardware/gamecontrollerdb.txt");
   assert(config.runner.gamepad_poll_interval_ns == 5'000'000U);
   assert(config.runner.gamepad_stale_timeout_ns == 100'000'000U);
-  assert(config.adapter.safety.safe_command_profile == "zero_torque");
-  assert(config.adapter.joint_names.size() == 29U);
+    assert(config.adapter.joint_names.size() == 29U);
   assert(config.joint_map_entries.size() == 29U);
 
   const JointMapBuildResult joint_map =
@@ -324,6 +355,103 @@ void TestLoadsDebugPrintBlock() {
   assert(!result.config->runner.forwarding_log_enabled);
 }
 
+void TestLoadsAssemblyOverrides() {
+  const std::string path = WritePm01Config("bridge_config_assembly_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "assembly:\n"
+           << "  profile: pm01\n"
+           << "  adapter:\n"
+           << "    type: pm01\n"
+           << "  command_ingress:\n"
+           << "    enabled: false\n"
+           << "    type: none\n"
+           << "  state_egress:\n"
+           << "    enabled: false\n"
+           << "    type: none\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->assembly.profile == "pm01");
+  assert(result.config->assembly.adapter.enabled);
+  assert(result.config->assembly.adapter.type == "pm01");
+  assert(!result.config->assembly.command_ingress.enabled);
+  assert(result.config->assembly.command_ingress.type == "none");
+  assert(!result.config->assembly.state_egress.enabled);
+  assert(result.config->assembly.state_egress.type == "none");
+}
+
+void TestLoadsGamepadAsAssemblyModule() {
+  const std::string path = WritePm01Config("bridge_config_assembly_gamepad_module_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "assembly:\n"
+           << "  modules:\n"
+           << "    - name: gamepad\n"
+           << "      type: sdl\n"
+           << "      enabled: true\n"
+           << "      controller_index: 3\n"
+           << "      mapping_path: docs/joy_stick/include/hardware/gamecontrollerdb.txt\n"
+           << "      poll_interval_ms: 9\n"
+           << "      stale_timeout_ms: 77\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->assembly.modules.size() == 1U);
+  assert(result.config->assembly.modules[0].name == "gamepad");
+  assert(result.config->assembly.modules[0].type == "sdl");
+  assert(result.config->assembly.modules[0].enabled);
+  assert(result.config->gamepad.enabled);
+  assert(result.config->gamepad.backend == "sdl");
+  assert(result.config->gamepad.controller_index == 3);
+  assert(result.config->gamepad.mapping_path ==
+         "docs/joy_stick/include/hardware/gamecontrollerdb.txt");
+  assert(result.config->runner.gamepad_poll_interval_ns == 9'000'000U);
+  assert(result.config->runner.gamepad_stale_timeout_ns == 77'000'000U);
+}
+
+void TestRejectsUnsupportedAssemblyModule() {
+  const std::string path = WritePm01Config("bridge_config_bad_assembly_module_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "assembly:\n"
+           << "  modules:\n"
+           << "    - name: recorder\n"
+           << "      type: lowstate_recorder\n"
+           << "      enabled: true\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(!result.succeeded());
+  assert(HasIssueCode(result, BridgeConfigIssueCode::kUnsupportedValue));
+}
+
+void TestAssemblyProfileSuppliesDefaultAdapterAndComponents() {
+  const std::string path = WritePm01ConfigWithoutAdapterKind(
+      "bridge_config_assembly_profile_test.yaml");
+  {
+    std::ofstream output(path, std::ios::app);
+    output << "assembly:\n"
+           << "  profile: pm01\n";
+  }
+
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->adapter.kind == "pm01");
+  assert(result.config->robot_type == "pm01");
+  assert(result.config->assembly.profile == "pm01");
+  assert(result.config->assembly.adapter.type == "pm01");
+  assert(result.config->assembly.command_ingress.enabled);
+  assert(result.config->assembly.command_ingress.type == "dds");
+  assert(result.config->assembly.state_egress.enabled);
+  assert(result.config->assembly.state_egress.type == "dds");
+}
+
 void TestLoadsPm01MotionStateConfig() {
   const std::string path = WritePm01Config("bridge_config_pm01_motion_state_test.yaml");
   {
@@ -361,7 +489,7 @@ void TestLoadsSimplifiedPm01InterfaceHintDefault() {
   assert(result.succeeded());
   assert(result.config.has_value());
   assert(result.config->adapter.connection.transport == "ros2");
-  assert(result.config->adapter.connection.interface_hint == "pm01");
+  assert(result.config->adapter.connection.interface_hint.empty());
 }
 
 void TestLoadsSimplifiedKeplerConfig() {
@@ -429,8 +557,8 @@ void TestRejectsSimplifiedConfigWithoutStateTopic() {
   assert(HasIssueCode(result, BridgeConfigIssueCode::kMissingField));
 }
 
-void TestLoadsPm01BackendField() {
-  const std::string path = "bridge_config_pm01_backend_test.yaml";
+void TestLoadsPm01ConfigWithoutAdapterBackend() {
+  const std::string path = "bridge_config_pm01_without_backend_test.yaml";
   {
     std::ofstream output(path);
     output
@@ -438,15 +566,9 @@ void TestLoadsPm01BackendField() {
         << "bridge:\n"
         << "  robot_name: pm01\n"
         << "  loop_rate_hz: 250\n"
-        << "  stale_command_timeout_ms: 120\n"
-        << "  startup_idle_policy:\n"
-        << "    mode: zero_torque\n"
-        << "    require_first_valid_command: true\n"
-        << "    use_adapter_safe_command: true\n"
-        << "  fault_policy:\n"
+        << "  stale_command_timeout_ms: 120\n"        << "  fault_policy:\n"
         << "    mode: fail_stop\n"
-        << "    send_safe_command_on_fault: true\n"
-        << "    publish_degraded_state_while_faulted: true\n"
+          << "    publish_degraded_state_while_faulted: true\n"
         << "    halt_command_writes_while_faulted: true\n"
         << "dds:\n"
         << "  domain_id: 0\n"
@@ -457,19 +579,13 @@ void TestLoadsPm01BackendField() {
         << "      name: rt/lowstate\n"
         << "adapter:\n"
         << "  kind: pm01\n"
-        << "  backend: ros2\n"
         << "  robot_model: pm01\n"
         << "  command_mode: joint_bridge\n"
         << "  connection:\n"
-        << "    transport: dds\n"
-        << "    interface_hint: pm01\n"
+        << "    transport: ros2\n"
         << "  startup:\n"
         << "    read_initial_state_timeout_ms: 1000\n"
-        << "    require_healthy_hardware: true\n"
-        << "  safety:\n"
-        << "    safe_command_profile: zero_torque\n"
-        << "    allow_safe_command_during_shutdown: true\n"
-        << "joint_mapping:\n"
+        << "    require_healthy_hardware: true\n"        << "joint_mapping:\n"
         << "  validation:\n"
         << "    expected_sim_joint_count: 1\n"
         << "    expected_hardware_joint_count: 1\n"
@@ -500,7 +616,6 @@ void TestLoadsPm01BackendField() {
   const auto result = load_bridge_config(path);
   assert(result.succeeded());
   assert(result.config.has_value());
-  assert(result.config->adapter.backend == "ros2");
 }
 
 void TestRejectsUnsupportedFaultPolicyMode() {
@@ -512,15 +627,9 @@ void TestRejectsUnsupportedFaultPolicyMode() {
         << "bridge:\n"
         << "  robot_name: kepler_k2\n"
         << "  loop_rate_hz: 250\n"
-        << "  stale_command_timeout_ms: 120\n"
-        << "  startup_idle_policy:\n"
-        << "    mode: zero_torque\n"
-        << "    require_first_valid_command: true\n"
-        << "    use_adapter_safe_command: true\n"
-        << "  fault_policy:\n"
+        << "  stale_command_timeout_ms: 120\n"        << "  fault_policy:\n"
         << "    mode: continue\n"
-        << "    send_safe_command_on_fault: true\n"
-        << "    publish_degraded_state_while_faulted: true\n"
+          << "    publish_degraded_state_while_faulted: true\n"
         << "    halt_command_writes_while_faulted: true\n"
         << "dds:\n"
         << "  domain_id: 0\n"
@@ -538,11 +647,7 @@ void TestRejectsUnsupportedFaultPolicyMode() {
         << "    interface_hint: robot_lan0\n"
         << "  startup:\n"
         << "    read_initial_state_timeout_ms: 1000\n"
-        << "    require_healthy_hardware: true\n"
-        << "  safety:\n"
-        << "    safe_command_profile: zero_torque\n"
-        << "    allow_safe_command_during_shutdown: true\n"
-        << "joint_mapping:\n"
+        << "    require_healthy_hardware: true\n"        << "joint_mapping:\n"
         << "  validation:\n"
         << "    expected_sim_joint_count: 1\n"
         << "    expected_hardware_joint_count: 1\n"
@@ -585,15 +690,9 @@ void TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth() {
         << "bridge:\n"
         << "  robot_name: kepler_k2\n"
         << "  loop_rate_hz: 250\n"
-        << "  stale_command_timeout_ms: 120\n"
-        << "  startup_idle_policy:\n"
-        << "    mode: zero_torque\n"
-        << "    require_first_valid_command: true\n"
-        << "    use_adapter_safe_command: true\n"
-        << "  fault_policy:\n"
+        << "  stale_command_timeout_ms: 120\n"        << "  fault_policy:\n"
         << "    mode: fail_stop\n"
-        << "    send_safe_command_on_fault: true\n"
-        << "    publish_degraded_state_while_faulted: true\n"
+          << "    publish_degraded_state_while_faulted: true\n"
         << "    halt_command_writes_while_faulted: true\n"
         << "dds:\n"
         << "  domain_id: 0\n"
@@ -611,11 +710,7 @@ void TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth() {
         << "    interface_hint: robot_lan0\n"
         << "  startup:\n"
         << "    read_initial_state_timeout_ms: 1000\n"
-        << "    require_healthy_hardware: true\n"
-        << "  safety:\n"
-        << "    safe_command_profile: zero_torque\n"
-        << "    allow_safe_command_during_shutdown: true\n"
-        << "joint_mapping:\n"
+        << "    require_healthy_hardware: true\n"        << "joint_mapping:\n"
         << "  validation:\n"
         << "    expected_sim_joint_count: 1\n"
         << "    expected_hardware_joint_count: 1\n"
@@ -678,15 +773,9 @@ void TestLoadsUnknownRobotKindAsFactoryInput() {
         << "bridge:\n"
         << "  robot_name: demo_robot\n"
         << "  loop_rate_hz: 250\n"
-        << "  stale_command_timeout_ms: 120\n"
-        << "  startup_idle_policy:\n"
-        << "    mode: zero_torque\n"
-        << "    require_first_valid_command: true\n"
-        << "    use_adapter_safe_command: true\n"
-        << "  fault_policy:\n"
+        << "  stale_command_timeout_ms: 120\n"        << "  fault_policy:\n"
         << "    mode: fail_stop\n"
-        << "    send_safe_command_on_fault: true\n"
-        << "    publish_degraded_state_while_faulted: true\n"
+          << "    publish_degraded_state_while_faulted: true\n"
         << "    halt_command_writes_while_faulted: true\n"
         << "dds:\n"
         << "  domain_id: 0\n"
@@ -704,11 +793,7 @@ void TestLoadsUnknownRobotKindAsFactoryInput() {
         << "    interface_hint: loopback0\n"
         << "  startup:\n"
         << "    read_initial_state_timeout_ms: 1000\n"
-        << "    require_healthy_hardware: true\n"
-        << "  safety:\n"
-        << "    safe_command_profile: zero_torque\n"
-        << "    allow_safe_command_during_shutdown: true\n"
-        << "joint_mapping:\n"
+        << "    require_healthy_hardware: true\n"        << "joint_mapping:\n"
         << "  validation:\n"
         << "    expected_sim_joint_count: 1\n"
         << "    expected_hardware_joint_count: 1\n"
@@ -764,6 +849,16 @@ void TestLoadsPm01ConfigAsFactoryInput() {
   assert(joint_map.succeeded());
 }
 
+void TestLoadsPm01ConfigWithoutInterfaceHint() {
+  const std::string path = WritePm01Config("bridge_config_pm01_no_interface_hint_test.yaml");
+  const auto result = load_bridge_config(path);
+  assert(result.succeeded());
+  assert(result.config.has_value());
+  assert(result.config->adapter.kind == "pm01");
+  assert(result.config->adapter.connection.transport == "ros2");
+  assert(result.config->adapter.connection.interface_hint.empty());
+}
+
 void TestRejectsNegativeDdsDomainId() {
   const std::string path = "bridge_config_negative_domain_test.yaml";
   {
@@ -773,15 +868,9 @@ void TestRejectsNegativeDdsDomainId() {
         << "bridge:\n"
         << "  robot_name: kepler_k2\n"
         << "  loop_rate_hz: 250\n"
-        << "  stale_command_timeout_ms: 120\n"
-        << "  startup_idle_policy:\n"
-        << "    mode: zero_torque\n"
-        << "    require_first_valid_command: true\n"
-        << "    use_adapter_safe_command: true\n"
-        << "  fault_policy:\n"
+        << "  stale_command_timeout_ms: 120\n"        << "  fault_policy:\n"
         << "    mode: fail_stop\n"
-        << "    send_safe_command_on_fault: true\n"
-        << "    publish_degraded_state_while_faulted: true\n"
+          << "    publish_degraded_state_while_faulted: true\n"
         << "    halt_command_writes_while_faulted: true\n"
         << "dds:\n"
         << "  domain_id: -1\n"
@@ -799,11 +888,7 @@ void TestRejectsNegativeDdsDomainId() {
         << "    interface_hint: robot_lan0\n"
         << "  startup:\n"
         << "    read_initial_state_timeout_ms: 1000\n"
-        << "    require_healthy_hardware: true\n"
-        << "  safety:\n"
-        << "    safe_command_profile: zero_torque\n"
-        << "    allow_safe_command_during_shutdown: true\n"
-        << "joint_mapping:\n"
+        << "    require_healthy_hardware: true\n"        << "joint_mapping:\n"
         << "  validation:\n"
         << "    expected_sim_joint_count: 1\n"
         << "    expected_hardware_joint_count: 1\n"
@@ -871,6 +956,10 @@ int main() {
   TestDefaultsLowStateTriggerToFixedRate();
   TestRejectsInvalidLowStateTrigger();
   TestLoadsDebugPrintBlock();
+  TestLoadsAssemblyOverrides();
+  TestLoadsGamepadAsAssemblyModule();
+  TestRejectsUnsupportedAssemblyModule();
+  TestAssemblyProfileSuppliesDefaultAdapterAndComponents();
   TestLoadsPm01MotionStateConfig();
   TestLoadsSimplifiedPm01InterfaceHintOverride();
   TestLoadsSimplifiedPm01InterfaceHintDefault();
@@ -878,11 +967,12 @@ int main() {
   TestRejectsSimplifiedConfigWithoutLoopRate();
   TestRejectsSimplifiedConfigWithoutCommandTopic();
   TestRejectsSimplifiedConfigWithoutStateTopic();
-  TestLoadsPm01BackendField();
+  TestLoadsPm01ConfigWithoutAdapterBackend();
   TestRejectsUnsupportedFaultPolicyMode();
   TestLoadsConfigWhenDisabledEntryIsOutsideEnabledHardwareWidth();
   TestLoadsUnknownRobotKindAsFactoryInput();
   TestLoadsPm01ConfigAsFactoryInput();
+  TestLoadsPm01ConfigWithoutInterfaceHint();
   TestRejectsNegativeDdsDomainId();
   TestLoadsGamepadConfig();
   return 0;

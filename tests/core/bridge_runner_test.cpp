@@ -40,7 +40,6 @@ using bridge::core::LifecycleState;
 using bridge::core::RobotSdkAdapter;
 using bridge::core::RunnerCallResult;
 using bridge::core::RunnerCallStatus;
-using bridge::core::StartupIdlePolicy;
 using bridge::core::StateFrame;
 using bridge::gamepad::CommonGamepad;
 using bridge::extensions::HookInvocationContext;
@@ -124,18 +123,10 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
             .fault = std::nullopt};
   }
 
-  AdapterCallResult write_safe_command() override {
-    write_safe_command_count_ += 1;
-    return {.status = AdapterCallStatus::kOk,
-            .detail = "safe written",
-            .fault = std::nullopt};
-  }
-
   [[nodiscard]] AdapterHealthResult query_health() const override {
     query_health_count_ += 1;
     AdapterHealth health;
     health.state = HealthState::kHealthy;
-    health.safe_command_supported = true;
     health.connection_alive = initialized_;
     health.degraded = false;
     return {
@@ -157,7 +148,6 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
   [[nodiscard]] int initialize_count() const noexcept { return initialize_count_; }
   [[nodiscard]] int read_count() const noexcept { return read_count_; }
   [[nodiscard]] int write_command_count() const noexcept { return write_command_count_; }
-  [[nodiscard]] int write_safe_command_count() const noexcept { return write_safe_command_count_; }
   [[nodiscard]] int query_health_count() const noexcept { return query_health_count_; }
   [[nodiscard]] int shutdown_count() const noexcept { return shutdown_count_; }
   [[nodiscard]] const std::optional<CommandFrame>& last_written_command() const noexcept {
@@ -172,7 +162,6 @@ class FakeRobotSdkAdapter final : public RobotSdkAdapter {
   int initialize_count_{0};
   int read_count_{0};
   int write_command_count_{0};
-  int write_safe_command_count_{0};
   mutable int query_health_count_{0};
   int shutdown_count_{0};
   std::optional<CommandFrame> last_written_command_;
@@ -364,11 +353,9 @@ BridgeRunnerConfig MakeConfig() {
   BridgeRunnerConfig config;
   config.loop_period_ns = 10;
   config.command_stale_timeout_ns = 50;
-  config.startup_idle_policy = StartupIdlePolicy::kPreferSafeCommand;
   config.fault_policy.fail_stop_on_transport_fault = true;
   config.fault_policy.fail_stop_on_command_stale = true;
   config.fault_policy.fail_stop_on_adapter_degraded = false;
-  config.fault_policy.write_safe_command_on_fault = true;
   config.fault_policy.continue_publishing_in_fault = true;
   return config;
 }
@@ -391,7 +378,6 @@ void TestHappyPathLifecycleProgression() {
 
   const BridgeRunnerStatus initialized = runner.status();
   assert(initialized.lifecycle_state == LifecycleState::kWaitingForState);
-  assert(initialized.startup_idle_active);
   assert(!initialized.first_state_received);
   assert(!initialized.first_command_received);
 
@@ -404,7 +390,6 @@ void TestHappyPathLifecycleProgression() {
   assert(adapter.last_written_command().has_value());
   assert(adapter.last_written_command()->sequence == 7);
   assert(adapter.last_written_command()->mode == ControlMode::kTorque);
-  assert(adapter.write_safe_command_count() == 0);
   assert(ingress.callback_submit_count() == 1);
 
   const RunnerCallResult run = runner.run();
@@ -412,7 +397,6 @@ void TestHappyPathLifecycleProgression() {
   assert(adapter.read_count() == 1);
   assert(adapter.query_health_count() == 2);
   assert(adapter.write_command_count() == 1);
-  assert(adapter.write_safe_command_count() == 0);
   assert(adapter.last_written_command().has_value());
   assert(adapter.last_written_command()->sequence == 7);
   assert(adapter.last_written_command()->mode == ControlMode::kTorque);
@@ -421,7 +405,6 @@ void TestHappyPathLifecycleProgression() {
   assert(active.lifecycle_state == LifecycleState::kActive);
   assert(active.first_state_received);
   assert(active.first_command_received);
-  assert(!active.startup_idle_active);
   assert(!active.command_stale);
   assert(!active.fail_stop_active);
   assert(active.cycle_count == 1);
@@ -443,7 +426,6 @@ void TestHappyPathLifecycleProgression() {
   assert(shutdown.succeeded());
   assert(ingress.stop_count() == 1);
   assert(egress.stop_count() == 1);
-  assert(adapter.write_safe_command_count() == 0);
   assert(adapter.shutdown_count() == 1);
   assert(runner.status().lifecycle_state == LifecycleState::kStopped);
 }
@@ -478,7 +460,6 @@ void TestStaleCommandTriggersFailStop() {
   assert(faulted.latched_fault->category == FaultCategory::kCommandStale);
   assert(faulted.latched_fault->latched);
   assert(adapter.write_command_count() == 1);
-  assert(adapter.write_safe_command_count() == 0);
   assert(egress.publish_count() == 1);
   assert(egress.published_states().front().lifecycle_state == LifecycleState::kActive);
   assert(!egress.published_states().front().fault.has_value());
@@ -486,7 +467,6 @@ void TestStaleCommandTriggersFailStop() {
   const RunnerCallResult second_run = runner.run();
   assert(second_run.succeeded());
   assert(adapter.write_command_count() == 1);
-  assert(adapter.write_safe_command_count() == 0);
   assert(egress.publish_count() == 2);
   const StateFrame& fault_published = egress.published_states().back();
   assert(fault_published.lifecycle_state == LifecycleState::kFaulted);
@@ -527,7 +507,6 @@ void TestWaitingForInitialStateDoesNotFailStopRunner() {
   assert(!waiting.fail_stop_active);
   assert(!waiting.latched_fault.has_value());
   assert(adapter.write_command_count() == 0);
-  assert(adapter.write_safe_command_count() == 0);
   assert(egress.publish_count() == 0);
 
   const RunnerCallResult active_run = runner.run();
@@ -744,8 +723,8 @@ void TestForwardingLogDisabledSkipsRunnerTelemetry() {
   std::ifstream log("logs/g1_forwarding.log");
   const std::string output((std::istreambuf_iterator<char>(log)),
                            std::istreambuf_iterator<char>());
-  assert(output.find("[g1_state_forward]") == std::string::npos);
-  assert(output.find("[g1_latency_breakdown]") == std::string::npos);
+  assert(output.find("[adapter_state_forward]") == std::string::npos);
+  assert(output.find("[adapter_latency_breakdown]") == std::string::npos);
 }
 
 void TestStateAvailableNotificationWakesEventWaiter() {

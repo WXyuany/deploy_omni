@@ -238,24 +238,9 @@ class UnitreeG1Adapter::Impl {
     return session_.write_command(command);
   }
 
-  [[nodiscard]] bridge::core::AdapterCallResult write_safe_command() {
-    if (!config_.safety.safe_command_supported) {
-      return {.status = bridge::core::AdapterCallStatus::kUnsupported,
-              .detail = "safe command is disabled by adapter config",
-              .fault = std::nullopt};
-    }
-    {
-      std::lock_guard<std::mutex> lock(command_state_mutex_);
-      last_mode_ = bridge::core::ControlMode::kSafeIdle;
-      last_mode_label_ = "safe_idle";
-    }
-    return session_.write_safe_command();
-  }
-
   [[nodiscard]] bridge::core::AdapterHealthResult query_health() const {
     bridge::core::AdapterHealthResult result;
     result.health = session_.health();
-    result.health.safe_command_supported = config_.safety.safe_command_supported;
     result.result = {.status = bridge::core::AdapterCallStatus::kOk,
                      .detail = "unitree_g1 adapter health queried",
                      .fault = std::nullopt};
@@ -358,10 +343,6 @@ bridge::core::AdapterReadResult UnitreeG1Adapter::read_state() {
 bridge::core::AdapterCallResult UnitreeG1Adapter::write_command(
     const bridge::core::CommandFrame& command) {
   return impl_->write_command(command);
-}
-
-bridge::core::AdapterCallResult UnitreeG1Adapter::write_safe_command() {
-  return impl_->write_safe_command();
 }
 
 bridge::core::AdapterHealthResult UnitreeG1Adapter::query_health() const {

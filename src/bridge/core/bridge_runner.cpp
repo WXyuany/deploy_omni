@@ -164,7 +164,6 @@ class BridgeRunner::Impl {
       }
 
       status_.lifecycle_state = LifecycleState::kInitializing;
-      status_.startup_idle_active = true;
     }
 
     AdapterCallResult adapter_init = dependencies_.adapter->initialize();
@@ -379,8 +378,6 @@ class BridgeRunner::Impl {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    status_.startup_idle_active = false;
-
     RunnerCallStatus final_status = RunnerCallStatus::kOk;
     std::string detail = "runner shutdown complete";
 
@@ -461,7 +458,6 @@ class BridgeRunner::Impl {
       return submission;
     }
 
-    status_.startup_idle_active = false;
     status_.command_stale = false;
     status_.command_buffer.has_active_command = true;
     status_.command_buffer.active_command_sequence = command_to_write.sequence;
@@ -832,8 +828,6 @@ class BridgeRunner::Impl {
   [[nodiscard]] RunnerCallResult apply_command_policy(
       const std::uint64_t cycle_time_ns) {
     std::optional<CommandFrame> command_to_observe;
-    bool issue_startup_idle = false;
-
     {
       std::lock_guard<std::mutex> lock(mutex_);
       update_command_staleness_locked(cycle_time_ns);
@@ -841,8 +835,6 @@ class BridgeRunner::Impl {
       if (status_.command_buffer.has_latest_command &&
                  !status_.command_buffer.latest_command_stale) {
         command_to_observe = latest_command_;
-      } else {
-        issue_startup_idle = !status_.first_command_received;
       }
     }
 
@@ -860,39 +852,10 @@ class BridgeRunner::Impl {
                                 status_.latched_fault);
     }
 
-    if (!issue_startup_idle) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      return make_runner_result(status_.degraded ? RunnerCallStatus::kDegraded
-                                                 : RunnerCallStatus::kOk,
-                                status_.command_stale ? "command stale" : "no command write",
-                                status_.latched_fault);
-    }
-
-    return apply_startup_idle_policy();
-  }
-
-  [[nodiscard]] RunnerCallResult apply_startup_idle_policy() {
-    StartupIdlePolicy policy;
-
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      policy = config_.startup_idle_policy;
-    }
-
-    if (policy == StartupIdlePolicy::kNoCommandWrite) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      status_.startup_idle_active = true;
-      return make_runner_result(RunnerCallStatus::kOk,
-                                "startup idle holding without command write",
-                                status_.latched_fault);
-    }
-
     std::lock_guard<std::mutex> lock(mutex_);
-    status_.startup_idle_active = true;
-    return make_runner_result(RunnerCallStatus::kOk,
-                              policy == StartupIdlePolicy::kRequireSafeCommand
-                                  ? "startup idle safe command disabled"
-                                  : "startup idle running without safe command support",
+    return make_runner_result(status_.degraded ? RunnerCallStatus::kDegraded
+                                               : RunnerCallStatus::kOk,
+                              status_.command_stale ? "command stale" : "no command write",
                               status_.latched_fault);
   }
 

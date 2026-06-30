@@ -26,13 +26,13 @@ enum class TopSection {
   kDds,
   kDebugPrint,
   kGamepad,
+  kAssembly,
   kAdapter,
   kJointMapping,
 };
 
 enum class BridgeSubsection {
   kNone,
-  kStartupIdlePolicy,
   kFaultPolicy,
 };
 
@@ -52,9 +52,16 @@ enum class AdapterSubsection {
   kNone,
   kConnection,
   kStartup,
-  kSafety,
   kMotionState,
   kTopics,
+};
+
+enum class AssemblySubsection {
+  kNone,
+  kAdapter,
+  kCommandIngress,
+  kStateEgress,
+  kModules,
 };
 
 enum class JointMappingSubsection {
@@ -76,16 +83,11 @@ struct RawBridgeConfig {
   std::optional<int> loop_rate_hz;
   std::optional<std::string> lowstate_trigger;
   std::optional<int> stale_command_timeout_ms;
-  std::optional<std::string> startup_idle_mode;
-  std::optional<bool> require_first_valid_command;
-  std::optional<bool> use_adapter_safe_command;
   std::optional<std::string> fault_mode;
-  std::optional<bool> send_safe_command_on_fault;
   std::optional<bool> publish_degraded_state_while_faulted;
   std::optional<bool> halt_command_writes_while_faulted;
   std::optional<std::string> adapter_kind;
   std::optional<std::string> robot_model;
-  std::optional<std::string> adapter_backend;
   std::optional<std::string> command_mode;
   std::optional<int> dds_domain_id;
   std::optional<std::string> dds_command_topic;
@@ -101,12 +103,18 @@ struct RawBridgeConfig {
   std::optional<std::string> gamepad_mapping_path;
   std::optional<int> gamepad_poll_interval_ms;
   std::optional<int> gamepad_stale_timeout_ms;
+  std::optional<std::string> assembly_profile;
+  std::optional<bool> assembly_adapter_enabled;
+  std::optional<std::string> assembly_adapter_type;
+  std::optional<bool> assembly_command_ingress_enabled;
+  std::optional<std::string> assembly_command_ingress_type;
+  std::optional<bool> assembly_state_egress_enabled;
+  std::optional<std::string> assembly_state_egress_type;
+  std::vector<AssemblyModuleConfig> assembly_modules;
   std::optional<std::string> connection_transport;
   std::optional<std::string> connection_interface_hint;
   std::optional<int> read_initial_state_timeout_ms;
   std::optional<bool> require_healthy_hardware;
-  std::optional<std::string> safe_command_profile;
-  std::optional<bool> allow_safe_command_during_shutdown;
   std::optional<bool> motion_state_required;
   std::optional<std::string> motion_state_required_task;
   std::optional<std::string> motion_state_initial_task;
@@ -417,20 +425,24 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   BridgeSubsection bridge_subsection = BridgeSubsection::kNone;
   DdsSubsection dds_subsection = DdsSubsection::kNone;
   DdsTopicSelection dds_topic_selection = DdsTopicSelection::kNone;
+  AssemblySubsection assembly_subsection = AssemblySubsection::kNone;
   AdapterSubsection adapter_subsection = AdapterSubsection::kNone;
   JointMappingSubsection joint_mapping_subsection = JointMappingSubsection::kNone;
   EntrySubsection entry_subsection = EntrySubsection::kNone;
   JointMapEntry* current_entry = nullptr;
+  AssemblyModuleConfig* current_assembly_module = nullptr;
 
   for (const ParsedLine& line : lines) {
     if (line.indent == 0) {
       bridge_subsection = BridgeSubsection::kNone;
       dds_subsection = DdsSubsection::kNone;
       dds_topic_selection = DdsTopicSelection::kNone;
+      assembly_subsection = AssemblySubsection::kNone;
       adapter_subsection = AdapterSubsection::kNone;
       joint_mapping_subsection = JointMappingSubsection::kNone;
       entry_subsection = EntrySubsection::kNone;
       current_entry = nullptr;
+      current_assembly_module = nullptr;
 
       if (line.text == "bridge:") {
         top = TopSection::kBridge;
@@ -446,6 +458,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
       }
       if (line.text == "gamepad:") {
         top = TopSection::kGamepad;
+        continue;
+      }
+      if (line.text == "assembly:") {
+        top = TopSection::kAssembly;
         continue;
       }
       if (line.text == "adapter:") {
@@ -475,10 +491,6 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
       if (key_value.has_value() && (key_value->first == "api_rate_hz" || key_value->first == "loop_rate_hz")) {
         assign_required<int>(&raw->loop_rate_hz, key_value->first, key_value->second,
                              issues, BridgeConfigIssueCode::kInvalidValue);
-        continue;
-      }
-      if (key_value.has_value() && key_value->first == "backend") {
-        raw->adapter_backend = key_value->second;
         continue;
       }
       if (key_value.has_value() && key_value->first == "transport") {
@@ -528,10 +540,6 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
         }
 
         if (key_value->second.empty()) {
-          if (key_value->first == "startup_idle_policy") {
-            bridge_subsection = BridgeSubsection::kStartupIdlePolicy;
-            continue;
-          }
           if (key_value->first == "fault_policy") {
             bridge_subsection = BridgeSubsection::kFaultPolicy;
             continue;
@@ -564,30 +572,9 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           continue;
         }
 
-        if (bridge_subsection == BridgeSubsection::kStartupIdlePolicy) {
-          if (key_value->first == "mode") {
-            raw->startup_idle_mode = key_value->second;
-          } else if (key_value->first == "require_first_valid_command") {
-            assign_required<bool>(&raw->require_first_valid_command,
-                                  "bridge.startup_idle_policy.require_first_valid_command",
-                                  key_value->second, issues,
-                                  BridgeConfigIssueCode::kInvalidValue);
-          } else if (key_value->first == "use_adapter_safe_command") {
-            assign_required<bool>(&raw->use_adapter_safe_command,
-                                  "bridge.startup_idle_policy.use_adapter_safe_command",
-                                  key_value->second, issues,
-                                  BridgeConfigIssueCode::kInvalidValue);
-          }
-        }
-
         if (bridge_subsection == BridgeSubsection::kFaultPolicy) {
           if (key_value->first == "mode") {
             raw->fault_mode = key_value->second;
-          } else if (key_value->first == "send_safe_command_on_fault") {
-            assign_required<bool>(&raw->send_safe_command_on_fault,
-                                  "bridge.fault_policy.send_safe_command_on_fault",
-                                  key_value->second, issues,
-                                  BridgeConfigIssueCode::kInvalidValue);
           } else if (key_value->first == "publish_degraded_state_while_faulted") {
             assign_required<bool>(&raw->publish_degraded_state_while_faulted,
                                   "bridge.fault_policy.publish_degraded_state_while_faulted",
@@ -743,6 +730,138 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
       continue;
     }
 
+    if (top == TopSection::kAssembly) {
+      if (line.indent == 2) {
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid assembly line: " + line.text);
+          continue;
+        }
+
+        assembly_subsection = AssemblySubsection::kNone;
+        if (key_value->first == "profile") {
+          raw->assembly_profile = key_value->second;
+        } else if (key_value->second.empty() && key_value->first == "adapter") {
+          assembly_subsection = AssemblySubsection::kAdapter;
+        } else if (key_value->second.empty() && key_value->first == "command_ingress") {
+          assembly_subsection = AssemblySubsection::kCommandIngress;
+        } else if (key_value->second.empty() && key_value->first == "state_egress") {
+          assembly_subsection = AssemblySubsection::kStateEgress;
+        } else if (key_value->second.empty() && key_value->first == "modules") {
+          assembly_subsection = AssemblySubsection::kModules;
+        }
+        continue;
+      }
+
+      if (line.indent == 4 && assembly_subsection == AssemblySubsection::kModules &&
+          starts_with(line.text, "- ")) {
+        raw->assembly_modules.emplace_back();
+        current_assembly_module = &raw->assembly_modules.back();
+        const auto key_value = split_key_value(line.text.substr(2));
+        if (key_value.has_value()) {
+          if (key_value->first == "name") {
+            current_assembly_module->name = key_value->second;
+          } else if (key_value->first == "type") {
+            current_assembly_module->type = key_value->second;
+          } else if (key_value->first == "enabled") {
+            const std::optional<bool> enabled = parse_bool(key_value->second);
+            if (enabled.has_value()) {
+              current_assembly_module->enabled = *enabled;
+            } else {
+              push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                         "assembly.modules.enabled must be true or false");
+            }
+          }
+        }
+        continue;
+      }
+
+      if (line.indent == 6 && assembly_subsection == AssemblySubsection::kModules &&
+          current_assembly_module != nullptr) {
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid assembly module line: " + line.text);
+          continue;
+        }
+
+        if (key_value->first == "name") {
+          current_assembly_module->name = key_value->second;
+        } else if (key_value->first == "type") {
+          current_assembly_module->type = key_value->second;
+        } else if (key_value->first == "enabled") {
+          const std::optional<bool> enabled = parse_bool(key_value->second);
+          if (enabled.has_value()) {
+            current_assembly_module->enabled = *enabled;
+          } else {
+            push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                       "assembly.modules.enabled must be true or false");
+          }
+        } else if (key_value->first == "controller_index") {
+          const std::optional<int> controller_index = parse_int(key_value->second);
+          if (controller_index.has_value()) {
+            current_assembly_module->controller_index = *controller_index;
+          } else {
+            push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                       "assembly.modules.controller_index must be an integer value");
+          }
+        } else if (key_value->first == "mapping_path") {
+          current_assembly_module->mapping_path = key_value->second;
+        } else if (key_value->first == "poll_interval_ms") {
+          const std::optional<int> poll_interval_ms = parse_int(key_value->second);
+          if (poll_interval_ms.has_value()) {
+            current_assembly_module->poll_interval_ms = *poll_interval_ms;
+          } else {
+            push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                       "assembly.modules.poll_interval_ms must be an integer value");
+          }
+        } else if (key_value->first == "stale_timeout_ms") {
+          const std::optional<int> stale_timeout_ms = parse_int(key_value->second);
+          if (stale_timeout_ms.has_value()) {
+            current_assembly_module->stale_timeout_ms = *stale_timeout_ms;
+          } else {
+            push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                       "assembly.modules.stale_timeout_ms must be an integer value");
+          }
+        }
+        continue;
+      }
+
+      if (line.indent == 4 && assembly_subsection != AssemblySubsection::kNone &&
+          assembly_subsection != AssemblySubsection::kModules) {
+        const auto key_value = split_key_value(line.text);
+        if (!key_value.has_value()) {
+          push_issue(issues, BridgeConfigIssueCode::kInvalidValue,
+                     "invalid assembly component line: " + line.text);
+          continue;
+        }
+
+        std::optional<bool>* enabled = nullptr;
+        std::optional<std::string>* type = nullptr;
+        if (assembly_subsection == AssemblySubsection::kAdapter) {
+          enabled = &raw->assembly_adapter_enabled;
+          type = &raw->assembly_adapter_type;
+        } else if (assembly_subsection == AssemblySubsection::kCommandIngress) {
+          enabled = &raw->assembly_command_ingress_enabled;
+          type = &raw->assembly_command_ingress_type;
+        } else if (assembly_subsection == AssemblySubsection::kStateEgress) {
+          enabled = &raw->assembly_state_egress_enabled;
+          type = &raw->assembly_state_egress_type;
+        }
+
+        if (key_value->first == "enabled" && enabled != nullptr) {
+          assign_required<bool>(enabled, "assembly.enabled", key_value->second,
+                                issues, BridgeConfigIssueCode::kInvalidValue);
+        } else if (key_value->first == "type" && type != nullptr) {
+          *type = key_value->second;
+        }
+        continue;
+      }
+
+      continue;
+    }
+
     if (top == TopSection::kAdapter) {
       if (line.indent == 2) {
         adapter_subsection = AdapterSubsection::kNone;
@@ -762,10 +881,6 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
             adapter_subsection = AdapterSubsection::kStartup;
             continue;
           }
-          if (key_value->first == "safety") {
-            adapter_subsection = AdapterSubsection::kSafety;
-            continue;
-          }
           if (key_value->first == "motion_state") {
             adapter_subsection = AdapterSubsection::kMotionState;
             continue;
@@ -780,8 +895,6 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           raw->adapter_kind = key_value->second;
         } else if (key_value->first == "robot_model") {
           raw->robot_model = key_value->second;
-        } else if (key_value->first == "backend") {
-          raw->adapter_backend = key_value->second;
         } else if (key_value->first == "command_mode") {
           raw->command_mode = key_value->second;
         }
@@ -813,17 +926,6 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           } else if (key_value->first == "require_healthy_hardware") {
             assign_required<bool>(&raw->require_healthy_hardware,
                                   "adapter.startup.require_healthy_hardware",
-                                  key_value->second, issues,
-                                  BridgeConfigIssueCode::kInvalidValue);
-          }
-        }
-
-        if (adapter_subsection == AdapterSubsection::kSafety) {
-          if (key_value->first == "safe_command_profile") {
-            raw->safe_command_profile = key_value->second;
-          } else if (key_value->first == "allow_safe_command_during_shutdown") {
-            assign_required<bool>(&raw->allow_safe_command_during_shutdown,
-                                  "adapter.safety.allow_safe_command_during_shutdown",
                                   key_value->second, issues,
                                   BridgeConfigIssueCode::kInvalidValue);
           }
@@ -1213,25 +1315,9 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
                  "bridge.stale_command_timeout_ms is required");
     }
   }
-  if (!raw.startup_idle_mode.has_value() && !simplified_config) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "bridge.startup_idle_policy.mode is required");
-  }
-  if (!raw.require_first_valid_command.has_value() && !simplified_config) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "bridge.startup_idle_policy.require_first_valid_command is required");
-  }
-  if (!raw.use_adapter_safe_command.has_value() && !simplified_config) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "bridge.startup_idle_policy.use_adapter_safe_command is required");
-  }
   if (!raw.fault_mode.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.fault_policy.mode is required");
-  }
-  if (!raw.send_safe_command_on_fault.has_value() && !simplified_config) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "bridge.fault_policy.send_safe_command_on_fault is required");
   }
   if (!raw.publish_degraded_state_while_faulted.has_value() && !simplified_config) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
@@ -1241,10 +1327,14 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "bridge.fault_policy.halt_command_writes_while_faulted is required");
   }
+  const bool has_profile_adapter_kind =
+      raw.assembly_profile.has_value() && !raw.assembly_profile->empty();
   if (!raw.adapter_kind.has_value() || raw.adapter_kind->empty()) {
     if (!simplified_config) {
-      push_issue(issues, BridgeConfigIssueCode::kMissingField,
-                 "adapter.kind is required");
+      if (!has_profile_adapter_kind) {
+        push_issue(issues, BridgeConfigIssueCode::kMissingField,
+                   "adapter.kind or assembly.profile is required");
+      }
     }
   }
   if ((!raw.command_mode.has_value() || raw.command_mode->empty()) &&
@@ -1271,9 +1361,12 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.connection.transport is required");
   }
+  const std::string configured_adapter_kind = raw.adapter_kind.has_value()
+      ? *raw.adapter_kind
+      : raw.assembly_profile.value_or(raw.robot_name.value_or(""));
   if ((!raw.connection_interface_hint.has_value() ||
        raw.connection_interface_hint->empty()) &&
-      !simplified_config) {
+      !simplified_config && configured_adapter_kind != "pm01") {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.connection.interface_hint is required");
   }
@@ -1285,15 +1378,6 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "adapter.startup.require_healthy_hardware is required");
   }
-  if ((!raw.safe_command_profile.has_value() || raw.safe_command_profile->empty()) &&
-      !simplified_config) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "adapter.safety.safe_command_profile is required");
-  }
-  if (!raw.allow_safe_command_during_shutdown.has_value() && !simplified_config) {
-    push_issue(issues, BridgeConfigIssueCode::kMissingField,
-               "adapter.safety.allow_safe_command_during_shutdown is required");
-  }
   if (raw.joint_map_entries.empty()) {
     push_issue(issues, BridgeConfigIssueCode::kMissingField,
                "joint_mapping.entries must contain at least one entry");
@@ -1303,11 +1387,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     return std::nullopt;
   }
 
-  const std::string adapter_kind = raw.adapter_kind.has_value() 
-      ? *raw.adapter_kind 
-      : raw.robot_name.value_or("kepler_k2");
+  const std::string adapter_kind = raw.adapter_kind.has_value()
+      ? *raw.adapter_kind
+      : raw.assembly_profile.value_or(raw.robot_name.value_or("kepler_k2"));
   const std::string robot_name = raw.robot_name.value_or(adapter_kind);
-  const std::string adapter_backend = raw.adapter_backend.value_or("");
   const std::string command_mode = raw.command_mode.value_or(
       adapter_kind == "pm01" ? "joint_bridge" : "torque_pd_passthrough");
   const int dds_domain_id = raw.dds_domain_id.value_or(0);
@@ -1317,12 +1400,12 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   const bool debug_print_forwarding_log =
       raw.debug_print_forwarding_log.value_or(true);
   const int debug_print_rate_hz = raw.debug_print_rate_hz.value_or(0);
-  const bool gamepad_enabled = raw.gamepad_enabled.value_or(false);
-  const std::string gamepad_backend = raw.gamepad_backend.value_or("sdl");
-  const int gamepad_controller_index = raw.gamepad_controller_index.value_or(0);
-  const std::string gamepad_mapping_path = raw.gamepad_mapping_path.value_or("");
-  const int gamepad_poll_interval_ms = raw.gamepad_poll_interval_ms.value_or(5);
-  const int gamepad_stale_timeout_ms = raw.gamepad_stale_timeout_ms.value_or(100);
+  bool gamepad_enabled = raw.gamepad_enabled.value_or(false);
+  std::string gamepad_backend = raw.gamepad_backend.value_or("sdl");
+  int gamepad_controller_index = raw.gamepad_controller_index.value_or(0);
+  std::string gamepad_mapping_path = raw.gamepad_mapping_path.value_or("");
+  int gamepad_poll_interval_ms = raw.gamepad_poll_interval_ms.value_or(5);
+  int gamepad_stale_timeout_ms = raw.gamepad_stale_timeout_ms.value_or(100);
   const bool motion_state_required = raw.motion_state_required.value_or(true);
   const std::string motion_state_required_task =
       raw.motion_state_required_task.value_or("joint_bridge");
@@ -1333,41 +1416,56 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   const std::string connection_transport =
       raw.connection_transport.value_or(adapter_kind == "pm01" ? "dds" : "udp");
   const std::string connection_interface_hint = raw.connection_interface_hint.value_or(
-      adapter_kind == "pm01" ? "pm01" : "robot_lan0");
+      adapter_kind == "pm01" ? "" : "robot_lan0");
   const int read_initial_state_timeout_ms =
       raw.read_initial_state_timeout_ms.value_or(1000);
   const bool require_healthy_hardware =
       raw.require_healthy_hardware.value_or(true);
-  const std::string safe_command_profile =
-      raw.safe_command_profile.value_or("zero_torque");
-  const bool allow_safe_command_during_shutdown =
-      raw.allow_safe_command_during_shutdown.value_or(true);
-  const std::string startup_idle_mode =
-      raw.startup_idle_mode.value_or("zero_torque");
-  const bool require_first_valid_command =
-      raw.require_first_valid_command.value_or(true);
-  const bool use_adapter_safe_command =
-      raw.use_adapter_safe_command.value_or(true);
   const std::string fault_mode = raw.fault_mode.value_or("fail_stop");
-  const bool send_safe_command_on_fault =
-      raw.send_safe_command_on_fault.value_or(true);
   const bool publish_degraded_state_while_faulted =
       raw.publish_degraded_state_while_faulted.value_or(true);
   const bool halt_command_writes_while_faulted =
       raw.halt_command_writes_while_faulted.value_or(true);
   const std::string lowstate_trigger = raw.lowstate_trigger.value_or("fixed_rate");
+  const std::string assembly_profile = raw.assembly_profile.value_or(adapter_kind);
+  const bool assembly_adapter_enabled = raw.assembly_adapter_enabled.value_or(true);
+  const std::string assembly_adapter_type = raw.assembly_adapter_type.value_or(adapter_kind);
+  const bool assembly_command_ingress_enabled =
+      raw.assembly_command_ingress_enabled.value_or(true);
+  const std::string assembly_command_ingress_type =
+      raw.assembly_command_ingress_type.value_or(
+          assembly_command_ingress_enabled ? "dds" : "none");
+  const bool assembly_state_egress_enabled =
+      raw.assembly_state_egress_enabled.value_or(true);
+  const std::string assembly_state_egress_type =
+      raw.assembly_state_egress_type.value_or(
+          assembly_state_egress_enabled ? "dds" : "none");
 
-  if (startup_idle_mode != "zero_torque") {
-    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
-               "bridge.startup_idle_policy.mode must be zero_torque");
+  for (const AssemblyModuleConfig& module : raw.assembly_modules) {
+    if (module.name != "gamepad") {
+      push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+                 "assembly.modules only supports gamepad module");
+      continue;
+    }
+
+    const std::string module_type = module.type.empty() ? "sdl" : module.type;
+    if (module_type != "sdl") {
+      push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+                 "assembly.modules.gamepad.type must be sdl");
+      continue;
+    }
+
+    gamepad_enabled = module.enabled;
+    gamepad_backend = module_type;
+    gamepad_controller_index = module.controller_index;
+    gamepad_mapping_path = module.mapping_path;
+    gamepad_poll_interval_ms = module.poll_interval_ms;
+    gamepad_stale_timeout_ms = module.stale_timeout_ms;
   }
+
   if (fault_mode != "fail_stop") {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "bridge.fault_policy.mode must be fail_stop");
-  }
-  if (!require_first_valid_command) {
-    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
-               "bridge.startup_idle_policy.require_first_valid_command must be true");
   }
   if (!halt_command_writes_while_faulted) {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
@@ -1376,6 +1474,26 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   if (lowstate_trigger != "fixed_rate" && lowstate_trigger != "event") {
     push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
                "bridge.lowstate_trigger must be fixed_rate or event");
+  }
+  if (!assembly_profile.empty() && assembly_profile != adapter_kind) {
+    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+               "assembly.profile must match adapter.kind");
+  }
+  if (!assembly_adapter_enabled) {
+    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+               "assembly.adapter.enabled must be true");
+  }
+  if (assembly_adapter_type != adapter_kind) {
+    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+               "assembly.adapter.type must match adapter.kind");
+  }
+  if (assembly_command_ingress_type != "dds" && assembly_command_ingress_type != "none") {
+    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+               "assembly.command_ingress.type must be dds or none");
+  }
+  if (assembly_state_egress_type != "dds" && assembly_state_egress_type != "none") {
+    push_issue(issues, BridgeConfigIssueCode::kUnsupportedValue,
+               "assembly.state_egress.type must be dds or none");
   }
 
   const std::optional<std::uint64_t> loop_period_ns = hz_to_period_ns(*raw.loop_rate_hz);
@@ -1504,6 +1622,14 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.runner.command_stale_timeout_ns = *stale_timeout_ns;
   config.runner.gamepad_poll_interval_ns = *gamepad_poll_interval_ns;
   config.runner.gamepad_stale_timeout_ns = *gamepad_stale_timeout_ns;
+  config.assembly.profile = assembly_profile;
+  config.assembly.adapter.enabled = assembly_adapter_enabled;
+  config.assembly.adapter.type = assembly_adapter_type;
+  config.assembly.command_ingress.enabled = assembly_command_ingress_enabled;
+  config.assembly.command_ingress.type = assembly_command_ingress_type;
+  config.assembly.state_egress.enabled = assembly_state_egress_enabled;
+  config.assembly.state_egress.type = assembly_state_egress_type;
+  config.assembly.modules = raw.assembly_modules;
   config.dds.domain_id = static_cast<std::uint32_t>(dds_domain_id);
   config.dds.topics.command = *raw.dds_command_topic;
   config.dds.topics.state = *raw.dds_state_topic;
@@ -1516,14 +1642,9 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.gamepad.backend = gamepad_backend;
   config.gamepad.controller_index = gamepad_controller_index;
   config.gamepad.mapping_path = gamepad_mapping_path;
-  config.runner.startup_idle_policy =
-      use_adapter_safe_command ? core::StartupIdlePolicy::kPreferSafeCommand
-                               : core::StartupIdlePolicy::kNoCommandWrite;
   config.runner.fault_policy.fail_stop_on_transport_fault = true;
   config.runner.fault_policy.fail_stop_on_command_stale = true;
   config.runner.fault_policy.fail_stop_on_adapter_degraded = false;
-  config.runner.fault_policy.write_safe_command_on_fault =
-      send_safe_command_on_fault;
   config.runner.fault_policy.continue_publishing_in_fault =
       publish_degraded_state_while_faulted;
 
@@ -1541,15 +1662,11 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
     }
   }
   config.adapter.robot_model = robot_model;
-  config.adapter.backend = adapter_backend;
   config.adapter.command_mode = command_mode;
   config.adapter.connection.transport = connection_transport;
   config.adapter.connection.interface_hint = connection_interface_hint;
   config.adapter.startup.read_initial_state_timeout_ns = *initialize_timeout_ns;
   config.adapter.startup.require_healthy_hardware = require_healthy_hardware;
-  config.adapter.safety.safe_command_profile = safe_command_profile;
-  config.adapter.safety.allow_safe_command_during_shutdown =
-      allow_safe_command_during_shutdown;
   config.adapter.motion_state.required = motion_state_required;
   config.adapter.motion_state.required_task = motion_state_required_task;
   config.adapter.motion_state.initial_task = motion_state_initial_task;

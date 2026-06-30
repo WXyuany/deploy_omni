@@ -41,11 +41,6 @@ struct AdapterStartupPolicyConfig {
   bool require_healthy_hardware{true};
 };
 
-struct AdapterSafetyPolicyConfig {
-  std::string safe_command_profile;
-  bool allow_safe_command_during_shutdown{true};
-};
-
 struct AdapterMotionStateConfig {
   bool required{true};
   std::string required_task{"joint_bridge"};
@@ -62,11 +57,9 @@ struct RobotAdapterConfig {
   std::string kind;
   std::string robot_name;
   std::string robot_model;
-  std::string backend;
   std::string command_mode;
   AdapterConnectionConfig connection;
   AdapterStartupPolicyConfig startup;
-  AdapterSafetyPolicyConfig safety;
   AdapterMotionStateConfig motion_state;
   AdapterTopicConfig topics;
   std::vector<std::string> joint_names;
@@ -109,10 +102,34 @@ struct GamepadConfig {
   std::string mapping_path;
 };
 
+struct AssemblyComponentConfig {
+  bool enabled{true};
+  std::string type;
+};
+
+struct AssemblyModuleConfig {
+  bool enabled{true};
+  std::string name;
+  std::string type;
+  int controller_index{0};
+  std::string mapping_path;
+  int poll_interval_ms{5};
+  int stale_timeout_ms{100};
+};
+
+struct AssemblyConfig {
+  std::string profile;
+  AssemblyComponentConfig adapter;
+  AssemblyComponentConfig command_ingress;
+  AssemblyComponentConfig state_egress;
+  std::vector<AssemblyModuleConfig> modules;
+};
+
 struct BridgeStartupConfig {
   std::string source_path;
   std::string robot_type;
   core::BridgeRunnerConfig runner;
+  AssemblyConfig assembly;
   DdsConfig dds;
   DebugPrintConfig debug_print;
   GamepadConfig gamepad;

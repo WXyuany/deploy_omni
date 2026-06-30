@@ -33,7 +33,6 @@ struct SessionConfig {
 };
 
 struct SafetyConfig {
-  bool safe_command_supported{true};
   bool require_initial_state_before_motion{true};
 };
 
@@ -73,7 +72,6 @@ class UnitreeG1Adapter final : public bridge::core::RobotSdkAdapter {
   [[nodiscard]] bridge::core::AdapterReadResult read_state() override;
   bridge::core::AdapterCallResult write_command(
       const bridge::core::CommandFrame& command) override;
-  bridge::core::AdapterCallResult write_safe_command() override;
   [[nodiscard]] bridge::core::AdapterHealthResult query_health() const override;
   bridge::core::AdapterCallResult shutdown() override;
 

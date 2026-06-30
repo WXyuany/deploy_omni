@@ -222,7 +222,6 @@ struct AdapterCallResult {
 
 struct AdapterHealth {
   HealthState state{HealthState::kUnknown};
-  bool safe_command_supported{false};
   bool connection_alive{false};
   bool degraded{false};
   std::uint64_t last_read_time_ns{0};

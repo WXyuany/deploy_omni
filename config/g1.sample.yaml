@@ -5,13 +5,8 @@ bridge:
   loop_rate_hz: 1000
   lowstate_trigger: event
   stale_command_timeout_ms: 120
-  startup_idle_policy:
-    mode: zero_torque
-    require_first_valid_command: true
-    use_adapter_safe_command: true
   fault_policy:
     mode: fail_stop
-    send_safe_command_on_fault: true
     publish_degraded_state_while_faulted: true
     halt_command_writes_while_faulted: true
 
@@ -29,17 +24,27 @@ debug_print:
   forwarding_log: false
   rate_hz: 2
 
-gamepad:
-  enabled: true
-  backend: sdl
-  controller_index: 0
-  mapping_path: docs/joy_stick/include/hardware/gamecontrollerdb.txt
-  poll_interval_ms: 5
-  stale_timeout_ms: 100
+assembly:
+  profile: unitree_g1
+  adapter:
+    type: unitree_g1
+  command_ingress:
+    enabled: true
+    type: dds
+  state_egress:
+    enabled: true
+    type: dds
 
+  modules:
+    - name: gamepad
+      enabled: true
+      type: sdl
+      controller_index: 0
+      mapping_path: docs/joy_stick/include/hardware/gamecontrollerdb.txt
+      poll_interval_ms: 5
+      stale_timeout_ms: 100
 adapter:
   kind: unitree_g1
-  backend: raw_low_level
   robot_model: g1
   command_mode: raw_low_level
   connection:
@@ -55,9 +60,6 @@ adapter:
   startup:
     read_initial_state_timeout_ms: 1000
     require_healthy_hardware: true
-  safety:
-    safe_command_profile: zero_torque
-    allow_safe_command_during_shutdown: true
 
 joint_mapping:
   validation:

@@ -94,6 +94,82 @@ create_gamepad_remote(const config::BridgeStartupConfig& startup_config) {
   return width;
 }
 
+class NoopCommandIngress final : public core::BridgeCommandIngress {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override {
+    return "noop_command_ingress";
+  }
+
+  core::RunnerCallResult start(core::BridgeCommandSink& command_sink,
+                               core::BridgeRuntimeEventSink& event_sink) override {
+    (void)command_sink;
+    (void)event_sink;
+    return {.status = core::RunnerCallStatus::kOk,
+            .detail = "noop command ingress started",
+            .fault = std::nullopt};
+  }
+
+  core::RunnerCallResult stop() override {
+    return {.status = core::RunnerCallStatus::kOk,
+            .detail = "noop command ingress stopped",
+            .fault = std::nullopt};
+  }
+};
+
+class NoopStateEgress final : public core::BridgeStateEgress {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override {
+    return "noop_state_egress";
+  }
+
+  core::RunnerCallResult start() override {
+    return {.status = core::RunnerCallStatus::kOk,
+            .detail = "noop state egress started",
+            .fault = std::nullopt};
+  }
+
+  core::RunnerCallResult publish(core::StateFrame& state) override {
+    (void)state;
+    return {.status = core::RunnerCallStatus::kOk,
+            .detail = "noop state egress published",
+            .fault = std::nullopt};
+  }
+
+  core::RunnerCallResult stop() override {
+    return {.status = core::RunnerCallStatus::kOk,
+            .detail = "noop state egress stopped",
+            .fault = std::nullopt};
+  }
+};
+
+void attach_configured_bridge_components(
+    const config::BridgeStartupConfig& startup_config, RobotAssembly* assembly) {
+  const bool use_command_ingress =
+      startup_config.assembly.command_ingress.enabled &&
+      startup_config.assembly.command_ingress.type == "dds";
+  const bool use_state_egress = startup_config.assembly.state_egress.enabled &&
+                                startup_config.assembly.state_egress.type == "dds";
+
+  if (use_command_ingress || use_state_egress) {
+    dds::DdsAssembly dds_assembly =
+        dds::create_dds_assembly(startup_config, assembly->joint_map);
+    assembly->runtime = dds_assembly.runtime;
+    if (use_command_ingress) {
+      assembly->command_ingress = std::move(dds_assembly.command_ingress);
+    }
+    if (use_state_egress) {
+      assembly->state_egress = std::move(dds_assembly.state_egress);
+    }
+  }
+
+  if (!assembly->command_ingress) {
+    assembly->command_ingress = std::make_unique<NoopCommandIngress>();
+  }
+  if (!assembly->state_egress) {
+    assembly->state_egress = std::make_unique<NoopStateEgress>();
+  }
+}
+
 #if BRIDGE_BUILD_KEPLER_K2
 [[nodiscard]] adapters::kepler_k2::KeplerK2AdapterConfig
 to_kepler_k2_adapter_config(const config::BridgeStartupConfig& startup_config) {
@@ -107,10 +183,6 @@ to_kepler_k2_adapter_config(const config::BridgeStartupConfig& startup_config) {
       startup_config.adapter.startup.read_initial_state_timeout_ns;
   config.session.read_timeout_ns = startup_config.runner.loop_period_ns;
   config.session.write_timeout_ns = startup_config.runner.loop_period_ns;
-  config.safety.safe_command_supported =
-      startup_config.runner.startup_idle_policy != core::StartupIdlePolicy::kNoCommandWrite &&
-      startup_config.adapter.safety.allow_safe_command_during_shutdown &&
-      startup_config.adapter.safety.safe_command_profile == "zero_torque";
   config.safety.require_initial_state_before_motion =
       startup_config.adapter.startup.require_healthy_hardware;
   config.safety.allow_command_when_imu_missing = true;
@@ -156,10 +228,6 @@ struct UnitreeG1AdapterConfigBuildResult {
   config.session.read_timeout_ns = startup_config.runner.loop_period_ns;
   config.session.write_timeout_ns = startup_config.runner.loop_period_ns;
   config.session.forwarding_log_enabled = startup_config.debug_print.forwarding_log;
-  config.safety.safe_command_supported =
-      startup_config.runner.startup_idle_policy != core::StartupIdlePolicy::kNoCommandWrite &&
-      startup_config.adapter.safety.allow_safe_command_during_shutdown &&
-      startup_config.adapter.safety.safe_command_profile == "zero_torque";
   config.safety.require_initial_state_before_motion =
       startup_config.adapter.startup.require_healthy_hardware;
   config.joint_names = startup_config.adapter.joint_names;
@@ -195,19 +263,11 @@ struct Pm01AdapterConfigBuildResult {
 
   adapters::pm01::Pm01AdapterConfig config;
   config.session.robot_id = startup_config.adapter.robot_name;
-  config.session.transport_endpoint = startup_config.adapter.connection.transport +
-                                     ":" +
-                                     startup_config.adapter.connection.interface_hint;
   config.session.control_profile = startup_config.adapter.command_mode;
-  config.backend = startup_config.adapter.backend;
   config.session.initialize_timeout_ns =
       startup_config.adapter.startup.read_initial_state_timeout_ns;
   config.session.read_timeout_ns = startup_config.runner.loop_period_ns;
   config.session.write_timeout_ns = startup_config.runner.loop_period_ns;
-  config.safety.safe_command_supported =
-      startup_config.runner.startup_idle_policy != core::StartupIdlePolicy::kNoCommandWrite &&
-      startup_config.adapter.safety.allow_safe_command_during_shutdown &&
-      startup_config.adapter.safety.safe_command_profile == "zero_torque";
   config.safety.require_initial_state_before_motion =
       startup_config.adapter.startup.require_healthy_hardware;
   config.motion_state.required = startup_config.adapter.motion_state.required;
@@ -284,11 +344,7 @@ struct Pm01AdapterConfigBuildResult {
       .gamepad_remote = create_gamepad_remote(startup_config),
   };
 
-  dds::DdsAssembly dds_assembly =
-      dds::create_dds_assembly(startup_config, assembly.joint_map);
-  assembly.runtime = dds_assembly.runtime;
-  assembly.command_ingress = std::move(dds_assembly.command_ingress);
-  assembly.state_egress = std::move(dds_assembly.state_egress);
+  attach_configured_bridge_components(startup_config, &assembly);
 
   return {
       .status = RobotAssemblyCreateStatus::kOk,
@@ -321,11 +377,7 @@ struct Pm01AdapterConfigBuildResult {
       .gamepad_remote = create_gamepad_remote(startup_config),
   };
 
-  dds::DdsAssembly dds_assembly =
-      dds::create_dds_assembly(startup_config, assembly.joint_map);
-  assembly.runtime = dds_assembly.runtime;
-  assembly.command_ingress = std::move(dds_assembly.command_ingress);
-  assembly.state_egress = std::move(dds_assembly.state_egress);
+  attach_configured_bridge_components(startup_config, &assembly);
 
   return {
       .status = RobotAssemblyCreateStatus::kOk,
@@ -368,11 +420,7 @@ struct Pm01AdapterConfigBuildResult {
       .gamepad_remote = create_gamepad_remote(startup_config),
   };
 
-  dds::DdsAssembly dds_assembly =
-      dds::create_dds_assembly(startup_config, assembly.joint_map);
-  assembly.runtime = dds_assembly.runtime;
-  assembly.command_ingress = std::move(dds_assembly.command_ingress);
-  assembly.state_egress = std::move(dds_assembly.state_egress);
+  attach_configured_bridge_components(startup_config, &assembly);
 
   return {
       .status = RobotAssemblyCreateStatus::kOk,

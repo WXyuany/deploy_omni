@@ -24,8 +24,6 @@ class RobotSdkAdapter {
 
   virtual AdapterCallResult write_command(const CommandFrame& command) = 0;
 
-  virtual AdapterCallResult write_safe_command() = 0;
-
   [[nodiscard]] virtual AdapterHealthResult query_health() const = 0;
 
   virtual AdapterCallResult shutdown() = 0;
