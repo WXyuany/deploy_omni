@@ -42,6 +42,8 @@ BRIDGE_CVTE_SDK_DIR=/opt/cvte/arm_control_sdk bash scripts/build_robot.sh carm
 
 ### 3. 先读取状态
 
+在 G1 内部运行时，先按 [SSH 登录说明](docs/unitree_g1/README.md#1-ssh-登录机器人) 通过网线或 `MEETINGROOM_WIFI` 登录。
+
 ```bash
 # G1：eth0 换成连接机器人的网卡；只读，不起立、不行走
 ./build-g1-only/unitree_g1_motion_demo --check --interface eth0

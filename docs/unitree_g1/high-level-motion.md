@@ -54,7 +54,9 @@ macOS 的容器构建和运行方式见 [Docker 构建](../build.md#macos-与-do
 每次只按一个键，不需要回车。模拟初始 FSM 为 0；任何输出中的 `DRY RUN` 都是模拟，
 不能用于证明机器人执行过动作。动作键统一使用小写字母，短按一次直接请求动作，不需要 Shift、数字键或 `!`。
 
-机器人连上后，SSH 登录，在机器人上的项目目录执行：
+按 [SSH 登录说明](README.md#1-ssh-登录机器人) 连接机器人：网线直连使用 `ssh unitree@192.168.123.164`（密码 `123`），连接 `MEETINGROOM_WIFI` 时使用 `ssh unitree@172.16.201.79`。
+
+登录后，在机器人上的项目目录执行：
 
 ```bash
 ./build-g1-motion/unitree_g1_motion_demo --check --interface eth0
