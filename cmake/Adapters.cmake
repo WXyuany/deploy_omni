@@ -85,24 +85,34 @@ if(BUILD_ROBOT_UNITREE_G1)
     endif()
   endif()
 
-  if(BUILD_UNITREE_G1_HARDWARE_TESTS)
-    add_executable(unitree_g1_sdk_robot_smoke
-      tests/adapters/unitree_g1_sdk_robot_smoke.cpp
-    )
-    target_link_libraries(unitree_g1_sdk_robot_smoke PRIVATE
-      bridge_project_options
-      bridge_adapter_unitree_g1
-    )
-    add_dependencies(unitree_g1_sdk_robot_smoke unitree_sdk2_nomain)
+  add_executable(unitree_g1_sensor_reader examples/unitree_g1/unitree_g1_sensor_reader.cpp)
+  target_link_libraries(unitree_g1_sensor_reader PRIVATE bridge_adapter_unitree_g1)
+  add_dependencies(unitree_g1_sensor_reader unitree_sdk2_nomain)
+  if(BUILD_TESTING)
+    add_test(NAME unitree_g1_sensor_reader_help COMMAND unitree_g1_sensor_reader --help)
+    add_test(NAME unitree_g1_sensor_reader_invalid_args
+      COMMAND unitree_g1_sensor_reader --duration invalid)
+    set_tests_properties(unitree_g1_sensor_reader_invalid_args PROPERTIES WILL_FAIL TRUE)
+  endif()
 
-    add_executable(unitree_g1_robot_services_smoke
-      tests/adapters/unitree_g1_robot_services_smoke.cpp
+  if(BUILD_UNITREE_G1_HARDWARE_TESTS)
+    add_executable(unitree_g1_sdk_check
+      tests/adapters/unitree_g1_sdk_check.cpp
     )
-    target_link_libraries(unitree_g1_robot_services_smoke PRIVATE
+    target_link_libraries(unitree_g1_sdk_check PRIVATE
       bridge_project_options
       bridge_adapter_unitree_g1
     )
-    add_dependencies(unitree_g1_robot_services_smoke unitree_sdk2_nomain)
+    add_dependencies(unitree_g1_sdk_check unitree_sdk2_nomain)
+
+    add_executable(unitree_g1_services_check
+      tests/adapters/unitree_g1_services_check.cpp
+    )
+    target_link_libraries(unitree_g1_services_check PRIVATE
+      bridge_project_options
+      bridge_adapter_unitree_g1
+    )
+    add_dependencies(unitree_g1_services_check unitree_sdk2_nomain)
   endif()
 endif()
 
@@ -128,14 +138,14 @@ if(BUILD_ROBOT_CVTE_CARM)
     INSTALL_RPATH "${BRIDGE_CVTE_SDK_DIR}/lib"
   )
 
-  add_executable(cvte_carm_sdk_smoke
-    tests/adapters/cvte_carm_sdk_smoke.cpp
+  add_executable(cvte_carm_check
+    tests/adapters/cvte_carm_check.cpp
   )
-  target_link_libraries(cvte_carm_sdk_smoke PRIVATE
+  target_link_libraries(cvte_carm_check PRIVATE
     bridge_project_options
     bridge_adapter_cvte_carm
   )
-  set_target_properties(cvte_carm_sdk_smoke PROPERTIES
+  set_target_properties(cvte_carm_check PROPERTIES
     BUILD_RPATH "${BRIDGE_CVTE_SDK_DIR}/lib"
   )
 endif()

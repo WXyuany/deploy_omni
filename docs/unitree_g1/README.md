@@ -79,6 +79,12 @@ cp config/g1.sample.yaml config/g1.local.yaml
 | 点云 | `rt/rslidar_points` |
 | SLAM 里程计 | `rt/lio_sam_ros2/mapping/re_location_odometry` |
 
-传感器硬件存在不等于驱动和 SLAM 发布者正在运行。当前设备此前未安装／运行 MID360 驱动，未取得点云与 SLAM 里程计；不将空快照标为通过。
+安装并启动 MID360 驱动后，运行点云读取程序：
+
+```bash
+./build-g1-only/unitree_g1_sensor_reader --interface eth0
+```
+
+完整参数、里程计读取及 C++ 调用见 [雷达与里程计](lidar.md)。
 `initialize()` 只创建 reader，实际以 `pointcloud_samples`、`odometry_samples` 与 optional 数据判断。
 驱动安装及 SLAM 导航控制不由本项目自动执行。

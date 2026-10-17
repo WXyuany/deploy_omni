@@ -18,9 +18,9 @@ sudo apt-get install -y build-essential cmake git python3 python3-venv
 
 | 命令 | 输出目录 | 主要目标 |
 |---|---|---|
-| `bash scripts/build_robot.sh g1` | `build-g1-only` | 键盘运控、状态工具、adapter_bridge |
+| `bash scripts/build_robot.sh g1` | `build-g1-only` | 键盘运控、点云／里程计读取、状态工具、adapter_bridge |
 | `bash scripts/build_robot.sh k2` | `build-k2-only` | adapter_bridge，K2 模拟实现 |
-| `bash scripts/build_robot.sh carm` | `build-cvte-only` | cvte_carm_sdk_smoke，单臂／双臂共用 |
+| `bash scripts/build_robot.sh carm` | `build-cvte-only` | cvte_carm_check，单臂／双臂共用 |
 | `bash scripts/build_robot.sh pm01` | `build-pm01-only` | adapter_bridge，须准备 ROS2 依赖 |
 
 脚本的第二个参数可指定构建目录。CArm 通过环境变量 `BRIDGE_CVTE_SDK_DIR` 指定 SDK；默认寻找根目录 `arm_control_sdk`。`BUILD_JOBS` 控制并行数。
@@ -47,7 +47,7 @@ ctest --test-dir build-g1 --output-on-failure
 | `BUILD_UNITREE_G1_MOTION_DEMO` | 生成 G1 高层键盘程序，默认 OFF |
 | `BUILD_UNITREE_G1_HARDWARE_TESTS` | 生成历史硬件诊断程序，默认 OFF；不会自动运行 |
 | `BUILD_GAMEPAD_SDL` | SDL 手柄支持；需要 `libsdl2-dev`；简易构建默认关闭 |
-| `BUILD_TESTING` | 生成离线测试；运行 CTest 不执行硬件烟测 |
+| `BUILD_TESTING` | 生成离线测试；运行 CTest 不执行硬件接口检查 |
 
 `all` 为历史兼容集合，仅包括 K2、PM01、G1，不包括 CArm；通常应按机型构建。
 G1 的 `--check` / `--dry-run` / `--enable-motion` 不依赖 SDL，也不需要启动 `adapter_bridge`。

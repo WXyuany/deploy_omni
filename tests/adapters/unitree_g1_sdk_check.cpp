@@ -50,13 +50,13 @@ int main() {
   passed = (observed_volume == test_volume) && passed;
   passed = report(sdk.set_volume(original_volume)) && passed;
 
-  passed = report(sdk.tts("G1 SDK smoke test", 0)) && passed;
+  passed = report(sdk.tts("G1 SDK interface test", 0)) && passed;
   passed = report(sdk.set_rgb_led(0U, 255U, 0U)) && passed;
   passed = report(sdk.set_rgb_led(0U, 0U, 0U)) && passed;
 
   const std::vector<std::uint8_t> silence(320U, 0U);
-  passed = report(sdk.play_stream("adapter_any_robot_smoke", "silence", silence)) && passed;
-  passed = report(sdk.stop_stream("adapter_any_robot_smoke")) && passed;
+  passed = report(sdk.play_stream("deploy_omni_audio_test", "silence", silence)) && passed;
+  passed = report(sdk.stop_stream("deploy_omni_audio_test")) && passed;
 
   std::vector<std::uint8_t> jpeg;
   passed = report(sdk.get_front_camera_jpeg(&jpeg)) && passed;

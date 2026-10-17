@@ -38,7 +38,7 @@ case "$robot" in
       -DBUILD_GAMEPAD_SDL=OFF
     )
     configure_args+=(-DBUILD_UNITREE_G1_MOTION_DEMO=ON)
-    build_targets=(adapter_bridge unitree_g1_motion_demo lowstate_frequency_receiver lowstate_field_recorder)
+    build_targets=(adapter_bridge unitree_g1_motion_demo unitree_g1_sensor_reader lowstate_frequency_receiver lowstate_field_recorder)
     sample_config="config/g1.sample.yaml"
     ;;
   cvte_carm|carm)
@@ -50,7 +50,7 @@ case "$robot" in
       -DBUILD_GAMEPAD_SDL=OFF
       "-DBRIDGE_CVTE_SDK_DIR=${BRIDGE_CVTE_SDK_DIR:-$repo_root/arm_control_sdk}"
     )
-    build_targets=(cvte_carm_sdk_smoke)
+    build_targets=(cvte_carm_check)
     sample_config="config/cvte_carm_a3.sample.yaml"
     ;;
   all)
@@ -79,7 +79,7 @@ cmake --build "$build_path" --target "${build_targets[@]}" --parallel "${BUILD_J
 
 printf '\nBuilt %s adapter in %s. Start with:\n' "$robot" "$build_dir"
 if [[ "$robot" == "cvte_carm" || "$robot" == "carm" ]]; then
-  printf '  %s/cvte_carm_sdk_smoke --model a3 --ip <A3控制器IP>\n' "$build_path"
+  printf '  %s/cvte_carm_check --model a3 --ip <A3控制器IP>\n' "$build_path"
 elif [[ "$robot" == "unitree_g1" || "$robot" == "g1" ]]; then
   printf '  %s/unitree_g1_motion_demo --check --interface <network-interface>\n' "$build_path"
 else

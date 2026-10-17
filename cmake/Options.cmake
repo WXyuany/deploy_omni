@@ -10,7 +10,7 @@ option(BUILD_ROBOT_PM01 "Build pm01 adapter support" OFF)
 option(BUILD_ROBOT_UNITREE_G1 "Build unitree_g1 adapter support" OFF)
 option(BUILD_ROBOT_CVTE_CARM "Build CVTE CArm adapter support" OFF)
 option(BUILD_GAMEPAD_SDL "Build SDL2 gamepad input support" ON)
-option(BUILD_UNITREE_G1_HARDWARE_TESTS "Build Unitree G1 hardware smoke tests" OFF)
+option(BUILD_UNITREE_G1_HARDWARE_TESTS "Build Unitree G1 hardware interface checks" OFF)
 option(BUILD_UNITREE_G1_MOTION_DEMO
   "Build the interactive Unitree G1 high-level motion demo" OFF)
 

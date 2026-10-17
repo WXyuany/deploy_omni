@@ -10,11 +10,11 @@
 
 ```bash
 BRIDGE_CVTE_SDK_DIR=/opt/cvte/arm_control_sdk bash scripts/build_robot.sh carm
-./build-cvte-only/cvte_carm_sdk_smoke --model d3 --ip 10.42.0.101
+./build-cvte-only/cvte_carm_check --model d3 --ip 10.42.0.101
 ```
 
 替换实际 D3 IP；期望 `joint_count=14 valid=1 degraded=0`、`connected=1`。
-关节数不同会使当前烟测失败，应先核对型号与配置，不强行截断或补零。
+关节数不同会使当前接口检查失败，应先核对型号与配置，不强行截断或补零。
 
 分别读取左右臂：
 

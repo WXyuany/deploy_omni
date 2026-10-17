@@ -6,7 +6,7 @@
 
 | 设备 | 从这里开始 | 当前状态 |
 |---|---|---|
-| 宇树 G1 | [连接、状态、运控、相机](docs/unitree_g1/README.md) | 已有状态及部分服务真机记录；新版键盘运控通过离线测试，待真机验证 |
+| 宇树 G1 | [连接、状态、运控、相机、雷达](docs/unitree_g1/README.md) | 已有状态及部分服务真机记录；新版键盘运控通过离线测试，待真机验证 |
 | Kepler K2 | [编译与模拟验证](docs/kepler_k2/README.md) | 主工程为模拟后端；真实 `motor_api` 尚未接入，不能直接控制真机 |
 | CVTE CArm A3 单臂 | [6 关节＋夹爪操作](docs/cvte_carm/single-arm.md) | 已做单臂关节与夹爪现场测试；本次整理后的版本为离线复核 |
 | CVTE CArm D3 双臂 | [左右臂接口与接入](docs/cvte_carm/dual-arm.md) | SDK 适配已实现，尚未真机测试；按左右臂分别检查 |
@@ -47,10 +47,10 @@ BRIDGE_CVTE_SDK_DIR=/opt/cvte/arm_control_sdk bash scripts/build_robot.sh carm
 ./build-g1-only/unitree_g1_motion_demo --check --interface eth0
 
 # CArm A3：在控制电脑运行，不需要 SSH 登录机械臂
-./build-cvte-only/cvte_carm_sdk_smoke --model a3 --ip 10.42.0.101
+./build-cvte-only/cvte_carm_check --model a3 --ip 10.42.0.101
 
 # CArm D3：替换实际控制器 IP
-./build-cvte-only/cvte_carm_sdk_smoke --model d3 --ip 10.42.0.101
+./build-cvte-only/cvte_carm_check --model d3 --ip 10.42.0.101
 ```
 
 K2 的检查命令和限制见 [K2 文档](docs/kepler_k2/README.md)。状态正常后，再按各机器人文档执行运动验证。
@@ -81,7 +81,7 @@ src/bridge/            对应实现；按 core / adapters / dds 等分层
 src/apps/              桥接主程序及状态工具
 examples/              unitree_g1 / cvte_carm / gamepad 示例
 scripts/               构建与仓库检查工具
-tests/                 离线测试及显式启用的硬件烟测
+tests/                 离线测试及显式启用的硬件接口检查
 docs/                  按机型组织的操作和技术文档
 third_party/           固定版本的共享依赖、ROS 消息包
 ```
@@ -89,6 +89,7 @@ third_party/           固定版本的共享依赖、ROS 消息包
 - [构建、依赖与测试](docs/build.md)
 - [统一接口与扩展方法](docs/architecture.md)
 - [配置、DDS 方向和排错](docs/runtime.md)
+- [G1 雷达点云与里程计](docs/unitree_g1/lidar.md)
 - [G1 SDK 接口索引](docs/unitree_g1/sdk.md)
 - [CArm SDK 与单／双臂接口对照](docs/cvte_carm/README.md)
 - [验证记录与待验收项](docs/validation.md)

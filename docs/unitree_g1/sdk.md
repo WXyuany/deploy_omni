@@ -124,7 +124,7 @@ if (snapshot.pointcloud.has_value()) {
 
 所有方法返回 `UnitreeG1SdkResult`。`code == 0` 表示 SDK 调用成功；`kUnitreeG1SdkNotInitialized` 表示 facade 未初始化；`kUnitreeG1SdkInvalidArgument` 表示调用方参数非法；其他非零值是 Unitree SDK 返回码。业务层必须检查 `succeeded()` 并记录 `operation`、`code`、`detail`。
 
-## 真机烟测
+## 真机接口检查
 
 硬件测试默认关闭，避免普通构建触碰真实机器人。连接 G1 后，在 ARM64 Linux 环境执行：
 
@@ -132,11 +132,11 @@ if (snapshot.pointcloud.has_value()) {
 cmake -S . -B build-g1-robot \
   -DBRIDGE_ROBOT=unitree_g1 \
   -DBUILD_UNITREE_G1_HARDWARE_TESTS=ON
-cmake --build build-g1-robot --target unitree_g1_sdk_robot_smoke
-./build-g1-robot/unitree_g1_sdk_robot_smoke
+cmake --build build-g1-robot --target unitree_g1_sdk_check
+./build-g1-robot/unitree_g1_sdk_check
 ```
 
-烟测覆盖服务方法，并额外调用 `get_front_camera_jpeg` 检查返回值和 JPEG 文件头。音量和静音会尝试恢复到原值，RGB 测试后设为黑色（不是恢复原颜色）；不调用 Loco、AGV、低层关节写入、手臂动作执行或模式选择/释放。
+接口检查覆盖服务方法，并额外调用 `get_front_camera_jpeg` 检查返回值和 JPEG 文件头。音量和静音会尝试恢复到原值，RGB 测试后设为黑色（不是恢复原颜色）；不调用 Loco、AGV、低层关节写入、手臂动作执行或模式选择/释放。
 
 ## 真机服务矩阵
 
@@ -146,8 +146,8 @@ cmake --build build-g1-robot --target unitree_g1_sdk_robot_smoke
 cmake -S . -B build-g1-robot \
   -DBRIDGE_ROBOT=unitree_g1 \
   -DBUILD_UNITREE_G1_HARDWARE_TESTS=ON
-cmake --build build-g1-robot --target unitree_g1_robot_services_smoke
-./build-g1-robot/unitree_g1_robot_services_smoke
+cmake --build build-g1-robot --target unitree_g1_services_check
+./build-g1-robot/unitree_g1_services_check
 ```
 
 该测试只读订阅 `rt/lowstate`，创建 `rt/lowcmd` writer 但不写入命令；同时调用 `RobotStateClient::ServiceList` 和 `LowPowerStatus`，并探测官方 SLAM/LiDAR topic。`ServiceList` 的 `status=0` 表示服务在线；`status=1` 表示当前未运行。`LowPowerStatus` 返回 `3104` 时是本次调用失败；仅凭该返回码不判定全部 G1 固件是否支持此 B2 兼容 API，不影响 `ServiceList` 结果。测试会尝试启动 `lidar_driver` 后恢复原状态，但不会启动 `unitree_slam` 或发送导航指令。
@@ -160,13 +160,9 @@ cmake --build build-g1-robot --target unitree_g1_robot_services_smoke
 | 设备状态服务 | 通过 | `ServiceList` 返回码 0，共 29 项；`state_estimator`、`video_hub_pc4`、`audio_player_service` 在线 |
 | 音频灯光服务 | 通过 | TTS、音量读写、静音读写、RGB、PCM 播放/停止均返回 0，音量与静音尝试恢复，RGB 最后设为黑色 |
 | 时间同步 | 通过 | chrony 同步源 `192.168.123.161`，`Leap status: Normal`，实测偏差约微秒级 |
-| 里程计服务 | 未发现数据 | 官方 `rt/lio_sam_ros2/mapping/re_location_odometry` 及兼容候选均为 0 帧；`unitree_slam` 未运行 |
-| lidar 服务 | 未运行 | 官方 `rt/rslidar_points` 及兼容候选均为 0 帧；`lidar_driver` 启动返回 `3104`，恢复后状态仍为 1 |
-| SLAM/导航服务 | 未运行 | `unitree_slam` 状态为 1；候选 SLAM pose topic 均为 0 帧 |
 | 前置 RealSense | 通过 | `/sys` 标识为 Intel RealSense Depth Camera 435i；`get_front_camera_jpeg` 返回合法 JPEG，本次 118,501 字节 |
 
-里程计、lidar、SLAM 的结果是设备当前服务状态和 DDS 数据面的观测结果。当前这台 G1 的系统镜像没有运行 `lidar_driver`、`unitree_slam`，传感器会话无法凭空产生点云或 SLAM 里程计。
 
-## 当前不支持
+## 雷达点云与里程计调用
 
-当前项目已经提供前置 JPEG 读取和官方 topic 的只读传感器会话。更换固件或启动对应服务后，优先使用上表 topic 和 ROS2 IDL；不要把图像或点云塞进 `StateFrame`，也不要复用不匹配的 Go2/B2 雷达消息类型。
+项目提供独立的点云和里程计订阅接口，完整读取命令、topic 配置与 C++ 调用见 [雷达与里程计](lidar.md)。安装并启动 MID360 驱动后可读取点云；SLAM 里程计另需启动对应定位服务。

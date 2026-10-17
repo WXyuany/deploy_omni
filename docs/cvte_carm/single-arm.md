@@ -10,7 +10,7 @@
 按 SDK 页面安装、编译后运行：
 
 ```bash
-./build-cvte-only/cvte_carm_sdk_smoke --model a3 --ip 10.42.0.101
+./build-cvte-only/cvte_carm_check --model a3 --ip 10.42.0.101
 ```
 
 正常应看到 `joint_count=6 valid=1 degraded=0`、`connected=1`，程序退出码为 0。
