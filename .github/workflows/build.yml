@@ -1,0 +1,30 @@
+name: Linux build and offline tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        robot: [unitree_g1, kepler_k2]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DBRIDGE_ROBOT=${{ matrix.robot }}
+          -DBUILD_GAMEPAD_SDL=OFF
+          -DBUILD_TESTING=ON
+          -DBUILD_UNITREE_G1_MOTION_DEMO=${{ matrix.robot == 'unitree_g1' && 'ON' || 'OFF' }}
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Offline tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Check published files and document links
+        run: python3 scripts/check_repository.py

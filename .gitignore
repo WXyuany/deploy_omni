@@ -1,0 +1,46 @@
+# Build outputs and runtime data
+/build*/
+/CMakeFiles/
+/CMakeCache.txt
+/Testing/
+/Makefile
+/cmake_install.cmake
+/CTestTestfile.cmake
+/compile_commands.json
+/install_manifest.txt
+*.o
+*.a
+*.so
+*.so.*
+*.log
+/log/
+/logs/
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+
+# Vendor SDK packages are supplied separately
+/arm_control_sdk*/
+/vendor/
+
+# Local settings, credentials and authoring workspace
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/.idea/
+/.vscode/
+/.agents/
+/.codex/
+/.opencode/
+/.sisyphus/
+**/AGENTS.md
+**/CLAUDE.md
+**/SKILL.md
+/docs/plans/
+/docs/brainstorms/
+/docs/superpowers/
+/笔记.md
+/config/*.local.yaml

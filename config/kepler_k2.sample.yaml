@@ -1,0 +1,44 @@
+robot_name: kepler_k2
+api_rate_hz: 1000
+
+dds:
+  command_topic: rt/lowcmd
+  state_topic: rt/lowstate
+
+debug_print:
+  state: false
+  cmd: false
+  rate_hz: 2
+
+assembly:
+  profile: kepler_k2
+  adapter:
+    type: kepler_k2
+  command_ingress:
+    enabled: true
+    type: dds
+  state_egress:
+    enabled: true
+    type: dds
+
+  modules:
+    - name: gamepad
+      enabled: false
+      type: sdl
+      controller_index: 0
+      mapping_path: config/gamecontrollerdb.txt
+      poll_interval_ms: 5
+      stale_timeout_ms: 100
+joints:
+  - { index: 0,  enable: true,  sign: 1.0, offset: 0.0 }
+  - { index: 1,  enable: true,  sign: 1.0, offset: 0.0 }
+  - { index: 2,  enable: true,  sign: 1.0, offset: 0.0 }
+  - { index: 3,  enable: true,  sign: 1.0, offset: 0.0 }
+  - { index: 4,  enable: true,  sign: 1.0, offset: 0.0 }
+  - { index: 5,  enable: true,  sign: 1.0, offset: 0.0 }
+  - { index: 6,  enable: true,  sign: -1.0, offset: 0.0 }
+  - { index: 7,  enable: true,  sign: -1.0, offset: 0.0 }
+  - { index: 8,  enable: true,  sign: -1.0, offset: 0.0 }
+  - { index: 9,  enable: true,  sign: -1.0, offset: 0.0 }
+  - { index: 10, enable: true,  sign: -1.0, offset: 0.0 }
+  - { index: 11, enable: true,  sign: -1.0, offset: 0.0 }

@@ -1,0 +1,2 @@
+# Optional local SDL2 controller mappings. SDL built-in mappings are used by default.
+# Add your controller line here if SDL does not recognize it.

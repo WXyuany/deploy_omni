@@ -1,0 +1,565 @@
+# Low-level simulation topic example. For high-level control use unitree_g1_motion_demo.
+schema_version: 1
+
+bridge:
+  robot_name: unitree_g1
+  loop_rate_hz: 1000
+  lowstate_trigger: event
+  stale_command_timeout_ms: 120
+  fault_policy:
+    mode: fail_stop
+    publish_degraded_state_while_faulted: true
+    halt_command_writes_while_faulted: true
+
+dds:
+  domain_id: 0
+  topics:
+    command:
+      name: bridge/rt/lowcmd
+    state:
+      name: bridge/rt/lowstate
+
+debug_print:
+  state: false
+  cmd: false
+  forwarding_log: false
+  rate_hz: 2
+
+assembly:
+  profile: unitree_g1
+  adapter:
+    type: unitree_g1
+  command_ingress:
+    enabled: true
+    type: dds
+  state_egress:
+    enabled: true
+    type: dds
+
+  modules:
+    - name: gamepad
+      enabled: false
+      type: sdl
+      controller_index: 0
+      mapping_path: config/gamecontrollerdb.txt
+      poll_interval_ms: 5
+      stale_timeout_ms: 100
+adapter:
+  kind: unitree_g1
+  robot_model: g1
+  command_mode: raw_low_level
+  connection:
+    transport: dds
+    interface_hint: eth0
+  topics:
+    command: custom/mujoco/rt/lowcmd
+    state: custom/mujoco/rt/lowstate
+    sim_command: custom/mujoco/rt/lowcmd
+    sim_state: custom/mujoco/rt/lowstate
+    imu: rt/secondary_imu
+  startup:
+    read_initial_state_timeout_ms: 1000
+    require_healthy_hardware: true
+
+joint_mapping:
+  validation:
+    expected_sim_joint_count: 29
+    expected_hardware_joint_count: 29
+    require_dense_enabled_sim_indexes: true
+    require_dense_enabled_hardware_indexes: true
+    require_unique_enabled_sim_names: true
+    require_unique_enabled_hardware_names: true
+  entries:
+    - sim_index: 0
+      hardware_index: 0
+      sim_name: sim_left_hip_pitch
+      hardware_name: left_hip_pitch
+      label: left_hip_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 1
+      hardware_index: 1
+      sim_name: sim_left_hip_roll
+      hardware_name: left_hip_roll
+      label: left_hip_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 2
+      hardware_index: 2
+      sim_name: sim_left_hip_yaw
+      hardware_name: left_hip_yaw
+      label: left_hip_yaw
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 3
+      hardware_index: 3
+      sim_name: sim_left_knee
+      hardware_name: left_knee
+      label: left_knee
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 4
+      hardware_index: 4
+      sim_name: sim_left_ankle_pitch
+      hardware_name: left_ankle_pitch
+      label: left_ankle_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 5
+      hardware_index: 5
+      sim_name: sim_left_ankle_roll
+      hardware_name: left_ankle_roll
+      label: left_ankle_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 6
+      hardware_index: 6
+      sim_name: sim_right_hip_pitch
+      hardware_name: right_hip_pitch
+      label: right_hip_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 7
+      hardware_index: 7
+      sim_name: sim_right_hip_roll
+      hardware_name: right_hip_roll
+      label: right_hip_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 8
+      hardware_index: 8
+      sim_name: sim_right_hip_yaw
+      hardware_name: right_hip_yaw
+      label: right_hip_yaw
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 9
+      hardware_index: 9
+      sim_name: sim_right_knee
+      hardware_name: right_knee
+      label: right_knee
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 10
+      hardware_index: 10
+      sim_name: sim_right_ankle_pitch
+      hardware_name: right_ankle_pitch
+      label: right_ankle_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 11
+      hardware_index: 11
+      sim_name: sim_right_ankle_roll
+      hardware_name: right_ankle_roll
+      label: right_ankle_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 12
+      hardware_index: 12
+      sim_name: sim_waist_yaw
+      hardware_name: waist_yaw
+      label: waist_yaw
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 13
+      hardware_index: 13
+      sim_name: sim_waist_roll
+      hardware_name: waist_roll
+      label: waist_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 14
+      hardware_index: 14
+      sim_name: sim_waist_pitch
+      hardware_name: waist_pitch
+      label: waist_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 15
+      hardware_index: 15
+      sim_name: sim_left_shoulder_pitch
+      hardware_name: left_shoulder_pitch
+      label: left_shoulder_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 16
+      hardware_index: 16
+      sim_name: sim_left_shoulder_roll
+      hardware_name: left_shoulder_roll
+      label: left_shoulder_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 17
+      hardware_index: 17
+      sim_name: sim_left_shoulder_yaw
+      hardware_name: left_shoulder_yaw
+      label: left_shoulder_yaw
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 18
+      hardware_index: 18
+      sim_name: sim_left_elbow
+      hardware_name: left_elbow
+      label: left_elbow
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 19
+      hardware_index: 19
+      sim_name: sim_left_wrist_roll
+      hardware_name: left_wrist_roll
+      label: left_wrist_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 20
+      hardware_index: 20
+      sim_name: sim_left_wrist_pitch
+      hardware_name: left_wrist_pitch
+      label: left_wrist_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 21
+      hardware_index: 21
+      sim_name: sim_left_wrist_yaw
+      hardware_name: left_wrist_yaw
+      label: left_wrist_yaw
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 22
+      hardware_index: 22
+      sim_name: sim_right_shoulder_pitch
+      hardware_name: right_shoulder_pitch
+      label: right_shoulder_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 23
+      hardware_index: 23
+      sim_name: sim_right_shoulder_roll
+      hardware_name: right_shoulder_roll
+      label: right_shoulder_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 24
+      hardware_index: 24
+      sim_name: sim_right_shoulder_yaw
+      hardware_name: right_shoulder_yaw
+      label: right_shoulder_yaw
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 25
+      hardware_index: 25
+      sim_name: sim_right_elbow
+      hardware_name: right_elbow
+      label: right_elbow
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 26
+      hardware_index: 26
+      sim_name: sim_right_wrist_roll
+      hardware_name: right_wrist_roll
+      label: right_wrist_roll
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 27
+      hardware_index: 27
+      sim_name: sim_right_wrist_pitch
+      hardware_name: right_wrist_pitch
+      label: right_wrist_pitch
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
+    - sim_index: 28
+      hardware_index: 28
+      sim_name: sim_right_wrist_yaw
+      hardware_name: right_wrist_yaw
+      label: right_wrist_yaw
+      enabled: true
+      transforms:
+        position: {sign: 1.0, offset: 0.0}
+        velocity: {sign: 1.0, offset: 0.0}
+        effort: {sign: 1.0, offset: 0.0}
+        stiffness: {sign: 1.0, offset: 0.0}
+        damping: {sign: 1.0, offset: 0.0}
+        acceleration: {sign: 1.0, offset: 0.0}
+      sim_limits:
+        position: {lower: -3.14, upper: 3.14}
+      hardware_limits:
+        position: {lower: -3.14, upper: 3.14}
