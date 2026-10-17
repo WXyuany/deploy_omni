@@ -168,7 +168,3 @@ SIGKILL、进程崩溃、断电或完全断网无法保证清理请求到达机�
 - [宇树官方 G1 LocoClient](https://github.com/unitreerobotics/unitree_sdk2/blob/master/include/unitree/robot/g1/loco/g1_loco_client.hpp)：模式、速度与握手接口的官方实现；使用时以本项目固定 SDK 版本为准。
 - [本项目 SDK API 编号](https://github.com/Zhijie-He/robot_shared/blob/a801170c41b1b0b527468752b32502a438da3667/library/unitree_sdk2/include/unitree/robot/g1/loco/g1_loco_api.hpp)。
 - [本项目 SDK 错误码](https://github.com/Zhijie-He/robot_shared/blob/a801170c41b1b0b527468752b32502a438da3667/library/unitree_sdk2/include/unitree/robot/g1/loco/g1_loco_error.hpp)。
-
-上游比本项目 SDK 多出用户控制切换和 mimic motion 等接口，本 demo 只使用项目已具备的交集。
-升级 SDK 时同步检查 API 编号、状态语义和错误码，运行离线测试，然后重新做受控真机验收。
-不要从不同机器人型号复制状态编号或将任意整数 FSM/action-id 暴露为键盘输入。
