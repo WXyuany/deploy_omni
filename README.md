@@ -6,9 +6,9 @@
 
 | 设备 | 从这里开始 | 当前状态 |
 |---|---|---|
-| 宇树 G1 | [连接、状态、运控、相机、雷达](docs/unitree_g1/README.md) | 已有状态及部分服务真机记录；新版键盘运控通过离线测试，待真机验证 |
+| 宇树 G1 | [连接、状态、运控、相机、雷达](docs/unitree_g1/README.md) | 已有状态及部分服务真机记录 |
 | Kepler K2 | [编译与模拟验证](docs/kepler_k2/README.md) | 等待接入官方api |
-| CVTE CArm A3 单臂 | [6 关节＋夹爪操作](docs/cvte_carm/single-arm.md) | 已做单臂关节与夹爪现场测试；本次整理后的版本为离线复核 |
+| CVTE CArm A3 单臂 | [6 关节＋夹爪操作](docs/cvte_carm/single-arm.md) | 已做单臂关节与夹爪现场测试 |
 | CVTE CArm D3 双臂 | [左右臂接口与接入](docs/cvte_carm/dual-arm.md) | SDK 适配已实现，尚未真机测试；按左右臂分别检查 |
 
 > 夹爪不计入机械臂关节数：已测试的 A3 是 **6 个关节＋1 个夹爪**。D3 配置样例按每侧 7 关节编写，以设备实际返回为准。
