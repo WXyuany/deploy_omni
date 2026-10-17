@@ -5,6 +5,38 @@
 CArm SDK 运行在控制电脑上，经网线访问控制器，**不需要 SSH 登录机械臂内部**。
 已测试设备是 A3 单臂：6 个运动关节＋1 个夹爪。D3 双臂适配未做真机测试。
 
+## 上位机与控制器的架构链路
+
+**二次开发程序正常运行在上位机上，通过网络调用控制器接口。** 在上位机安装 SDK、编译本项目并运行程序即可；控制器负责驱动机械臂本体。
+
+```mermaid
+flowchart TD
+    host["上位机程序：C++ / Python / ROS / ROS2 / 本项目适配器"]
+    sdk["arm_control_sdk / Python SDK"]
+    controller["A3 控制器"]
+    arm["机械臂本体与末端执行器"]
+    host --> sdk
+    sdk -->|"WebSocket 10.42.0.101:8090"| controller
+    controller --> arm
+```
+
+`10.42.0.101:8090` 是这里使用的 A3 控制器地址。D3 使用同样的上位机部署方式，换成实际控制器地址和双臂 SDK 类，分别处理左右臂。
+SDK 包的架构应匹配**运行程序的上位机环境**：Linux ARM64 用 arm64 包，Linux x86_64 用 amd64 包。
+
+上位机可以进行以下开发：
+
+| 开发内容 | 调用入口 |
+|---|---|
+| 连接和状态读取 | SDK 的 `connect`、`is_connected`、`get_status`；或本项目的初始化、状态与健康查询 |
+| 关节位置、速度、力矩读取 | SDK 的 `get_joint_pos`、`get_joint_vel`、`get_joint_tau`；统一适配器提供关节状态 |
+| 运动控制 | SDK 的 `track_joint`、`move_joint` 等；统一适配器支持关节位置跟随 |
+| 末端执行器控制 | SDK 的 `get_eeff_config`、`set_eeff` 等；夹爪示例见单臂操作页 |
+| 逆运动学和轨迹控制 | 厂商 SDK 的逆解、运动与轨迹接口；按配套 SDK 签名调用 |
+| ROS / ROS2 节点 | 在上位机编写节点封装 SDK，将状态发布为话题，将控制请求转换为 SDK 调用 |
+| 本项目统一适配器 | 使用 `CvteCarmAdapter` 接入统一状态、位置命令和故障处理；需要 DDS 时再启用桥接构建 |
+
+上表中的 ROS / ROS2 节点属于可扩展的开发方式，本仓库没有随 CArm 构建自动启动的 ROS 节点。具体接口范围见下方“本项目接口边界”。
+
 ## 1. 安装 SDK
 
 从 [CVTE 文档中心](https://cvte-bot.feishu.cn/wiki/GyGbwKeWMiqEfDk80QXc9zeCnjf) 获取 SDK，解压到本机；有权限的账号可能需要登录。
