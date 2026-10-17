@@ -37,6 +37,12 @@ SDK 包的架构应匹配**运行程序的上位机环境**：Linux ARM64 用 ar
 
 上表中的 ROS / ROS2 节点属于可扩展的开发方式，本仓库没有随 CArm 构建自动启动的 ROS 节点。具体接口范围见下方“本项目接口边界”。
 
+### 上位机界面
+
+![CVTE 上位机控制界面，当前选择 D3_AC_C_L-1](../assets/cvte_carm/host-control-ui.png)
+
+图中为 D3 界面示例，可查看关节与末端位姿，操作关节、控制模式及轨迹录制。实际显示的关节数量随所选型号变化；已测试的 A3 为 6 个运动关节＋1 个夹爪。
+
 ## 1. 安装 SDK
 
 从 [CVTE 文档中心](https://cvte-bot.feishu.cn/wiki/GyGbwKeWMiqEfDk80QXc9zeCnjf) 获取 SDK，解压到本机；有权限的账号可能需要登录。

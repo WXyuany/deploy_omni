@@ -15,6 +15,8 @@
 
 CArm 二次开发程序运行在**上位机**：上位机程序 → SDK → WebSocket（A3 示例 `10.42.0.101:8090`）→ 控制器 → 机械臂本体。连接、状态、运动、夹爪及 ROS / ROS2 扩展方式见 [上位机架构与开发能力](docs/cvte_carm/README.md#上位机与控制器的架构链路)。
 
+![CVTE 上位机界面示例（D3）](docs/assets/cvte_carm/host-control-ui.png)
+
 ## 三步开始
 
 以下命令在 **Linux x86_64 / ARM64** 的项目根目录运行。macOS 用户先看 [Docker 构建](docs/build.md#macos-与-docker)。

@@ -35,6 +35,12 @@ def main():
         if path.is_symlink():
             continue
         count += 1
+        # Screenshots are intentional documentation assets, not build artifacts.
+        if parts[:2] == ('docs', 'assets') and path.suffix == '.png':
+            with path.open('rb') as asset:
+                if asset.read(8) != b'\x89PNG\r\n\x1a\n':
+                    errors.append(name + ': invalid PNG signature')
+            continue
         try:
             text = path.read_text()
         except UnicodeDecodeError:
@@ -56,7 +62,7 @@ def main():
     if errors:
         print('\n'.join(errors), file=sys.stderr)
         return 1
-    print('Repository checks passed: {} source/doc files; no forbidden tracked artifacts; local links valid.'.format(count))
+    print('Repository checks passed: {} source/doc/asset files; no forbidden tracked artifacts; local links valid.'.format(count))
     return 0
 
 
