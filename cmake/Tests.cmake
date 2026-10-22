@@ -231,5 +231,7 @@ if(BUILD_TESTING)
   if(Python3_Interpreter_FOUND)
     add_test(NAME cvte_carm_examples_test
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/demo/cvte_carm_examples_test.py")
+    add_test(NAME verify_robot_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/demo/verify_robot_test.py")
   endif()
 endif()

@@ -2,7 +2,7 @@
 
 [首页](../../README.md) · [通用开发指南](../development.md)
 
-[连接与编译](#连接与编译) · [高层运控](#高层运控) · [关节与 IMU](#关节与-imu) · [相机音频与灯光](#相机音频与灯光) · [点云与里程计](#点云与里程计) · [SDK 接口](#sdk-接口)
+[连接与编译](#连接与编译) · [一行命令验证](#一行命令验证) · [高层运控](#高层运控) · [关节与 IMU](#关节与-imu) · [相机音频与灯光](#相机音频与灯光) · [点云与里程计](#点云与里程计) · [SDK 接口](#sdk-接口)
 
 已有状态及部分服务真机记录。本文使用项目内置 SDK2 的 G1 `LocoClient`。
 
@@ -26,6 +26,26 @@ bash scripts/build_robot.sh g1
 
 正常输出应包含 `CheckMode code=0`、`GetFsmId code=0`、`LowState fresh/CRC/health checks: PASS`。
 程序默认只读，`--interface` 填网卡名，DDS domain 为 0。
+
+## 一行命令验证
+
+在 Linux 项目根目录运行。脚本自动增量编译所需程序，默认网卡 `eth0`；其他网卡在命令后加 `--interface 网卡名`。
+
+| 验证功能 | 一行命令 | 结果怎么看 |
+|---|---|---|
+| 状态与运控就绪检查，只读 | `python3 scripts/verify_robot.py g1 state` | FSM 查询返回 0，LowState 新鲜、CRC 和健康检查通过 |
+| 设备服务列表，只读 | `python3 scripts/verify_robot.py g1 device` | `ServiceList code=0`，服务数量大于 0；`status=0` 在线 |
+| 前置相机 | `python3 scripts/verify_robot.py g1 camera` | JPEG 首尾标记有效，打印 `jpeg_saved`；打开保存的图片查看 |
+| 音频 | `python3 scripts/verify_robot.py g1 audio` | 音量读回一致，TTS／播放接口成功；现场听到英文测试语音，结束恢复原音量 |
+| 灯光 | `python3 scripts/verify_robot.py g1 led` | API 返回 0，现场依次看到红、绿、蓝各约 1 秒，最后熄灭 |
+| 雷达点云 | `python3 scripts/verify_robot.py g1 pointcloud` | 10 秒内 `pointcloud samples` 大于 0，查看点云字段和字节数 |
+| SLAM 里程计 | `python3 scripts/verify_robot.py g1 odometry` | 10 秒内 `odometry samples` 大于 0，显示 XYZ 和四元数 |
+| 高层键盘运控 | `python3 scripts/verify_robot.py g1 motion` | 按下方流程人工操作，核对实际动作与停车效果 |
+| 离线回归 | `python3 scripts/verify_robot.py g1 offline` | CTest 显示 `100% tests passed`，不连接机器人 |
+
+点云、里程计先启动对应驱动／定位服务；采样时间可加 `--seconds 30`。
+每次结果摘要存入 `logs/verification/` 下的独立目录，相机图片保存在同一目录。
+`PASS` 表示本项数据／自动检查通过，`API_OK` 表示接口调用通过、声光效果需现场核对，`COMPLETED` 仅表示交互运控已结束；失败为非零退出码。
 
 ## 高层运控
 
@@ -292,8 +312,8 @@ cmake --build build-g1-check \
 ./build-g1-check/unitree_g1_services_check
 ```
 
-SDK 检查会调用 TTS、音频、灯光、相机等接口，尝试恢复音量和静音，最终将 RGB 设为黑色。
-服务检查订阅 LowState、查询设备服务并探测传感器 topic；会尝试启动 `lidar_driver` 后恢复状态，不启动 SLAM 或下发导航动作。两者不执行运控。
+SDK 检查支持 `--test device|audio|led|camera|metadata` 单项选择；音频结束恢复原音量，RGB 测试后设为黑色，相机保存 JPEG。
+服务检查只读订阅 LowState、查询设备服务并探测传感器 topic，不启停驱动或 SLAM。两者不执行运控。
 
 | 已有真机记录 | 结果 |
 |---|---|

@@ -108,12 +108,6 @@ int main() {
               << " protect=" << service.protect << '\n';
   }
 
-  int32_t lidar_switch_status = -1;
-  const auto lidar_switch_code =
-      robot_state.ServiceSwitch("lidar_driver", 1, lidar_switch_status);
-  std::cout << "lidar_driver_start: code=" << lidar_switch_code
-            << " status=" << lidar_switch_status << '\n';
-
   std::vector<std::uint8_t> camera_sample;
   unitree::robot::go2::VideoClient video_client;
   video_client.SetTimeout(2.0F);
@@ -129,11 +123,6 @@ int main() {
   const auto sample_window_start = std::chrono::steady_clock::now();
   std::this_thread::sleep_for(std::chrono::seconds(3));
 
-  int32_t lidar_stop_status = -1;
-  const auto lidar_stop_code =
-      robot_state.ServiceSwitch("lidar_driver", 0, lidar_stop_status);
-  std::cout << "lidar_driver_restore: code=" << lidar_stop_code
-            << " status=" << lidar_stop_status << '\n';
   const auto sample_window_seconds = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - sample_window_start).count();
 

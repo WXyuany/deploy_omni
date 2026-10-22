@@ -13,7 +13,7 @@ sudo apt-get update
 sudo apt-get install -y build-essential cmake git python3 python3-venv
 ```
 
-然后选择下方设备手册，按“连接 → 编译 → 读取状态 → 调用接口”操作。每类设备只有一份手册，包含运行命令、配置和接口说明。
+然后选择下方设备手册，按“连接 → 编译 → 验证功能 → 调用接口”操作。每类设备只有一份手册，包含一行验证命令、预期结果、配置和接口说明。
 
 ## 设备手册
 

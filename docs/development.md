@@ -125,6 +125,15 @@ SDK 示例可独立运行。需要通用关节转发时，复制配置模板、�
 
 ## 测试
 
+各设备手册的“一行命令验证”提供具体功能、预期输出和判断标准。统一入口可列出全部验证项：
+
+```bash
+python3 scripts/verify_robot.py --list
+```
+
+脚本按功能编译到 `build-verify-<设备>/`，A3／D3 共用 `build-verify-carm/`；后续重复运行增量编译，也可用 `--skip-build` 直接使用已有产物。用 `--dry-run` 只查看将执行的命令。
+每次结果摘要位于 `logs/verification/<设备>-<功能>-<时间>-<进程号>/result.json`，包含命令、退出码与检查范围。相机验证另存 JPEG。
+
 ```bash
 cmake --build build-g1 -j2
 ctest --test-dir build-g1 --output-on-failure

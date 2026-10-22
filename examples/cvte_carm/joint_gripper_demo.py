@@ -45,9 +45,17 @@ def _parse_args() -> argparse.Namespace:
         default=5.0,
         help="gripper force/torque limit for this test",
     )
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--skip-gripper", action="store_true", help="skip the gripper test"
     )
+    selection.add_argument(
+        "--only-gripper", action="store_true", help="test only the gripper; no joint motion"
+    )
+    parser.add_argument("--joint-tolerance", type=float, default=0.05,
+                        help="maximum absolute joint feedback error in radians")
+    parser.add_argument("--gripper-tolerance", type=float, default=0.005,
+                        help="maximum absolute gripper feedback error in metres")
     parser.add_argument(
         "--yes", action="store_true", help="start without the interactive confirmation"
     )
@@ -68,12 +76,31 @@ def _check_motion_target(
         )
 
 
+def _check_feedback(observed, target, tolerance, label):
+    if len(observed) != len(target):
+        raise RuntimeError(f"{label}: unexpected feedback width")
+    errors = [abs(float(actual) - expected) for actual, expected in zip(observed, target)]
+    _print(label + "_feedback", {"max_error": max(errors), "tolerance": tolerance})
+    if not all(math.isfinite(error) and error <= tolerance for error in errors):
+        raise RuntimeError(f"{label}: feedback did not reach the target")
+
+
 def main() -> int:
     args = _parse_args()
+    numbers = (args.amplitude, args.move_time, args.gripper_open, args.gripper_torque,
+               args.joint_tolerance, args.gripper_tolerance)
+    if not all(math.isfinite(value) for value in numbers):
+        raise RuntimeError("all numeric arguments must be finite")
+    if not 1 <= args.port <= 65535:
+        raise RuntimeError("--port must be between 1 and 65535")
     if args.amplitude <= 0 or args.move_time <= 0:
         raise RuntimeError("--amplitude and --move-time must be positive")
     if args.gripper_open < 0 or args.gripper_torque <= 0:
         raise RuntimeError("gripper opening must be non-negative and torque positive")
+    if args.joint_tolerance <= 0 or args.gripper_tolerance <= 0:
+        raise RuntimeError("feedback tolerances must be positive")
+    if not args.only_gripper and args.amplitude <= 2 * args.joint_tolerance:
+        raise RuntimeError("--amplitude must exceed twice --joint-tolerance")
 
     try:
         from carm import CArmSingleCol
@@ -112,11 +139,33 @@ def main() -> int:
         upper = [float(value) for value in config.get("limit_upper", [])]
         if len(home) != 6 or len(lower) != 6 or len(upper) != 6:
             raise RuntimeError("A3 joint state or limits have an unexpected width")
+        if not all(math.isfinite(value) for value in home + lower + upper):
+            raise RuntimeError("A3 joint state or limits contain non-finite values")
         _print("home_joint_pos", home)
         _print("joint_limits", {"lower": lower, "upper": upper})
 
         offsets = [args.amplitude, args.amplitude, -args.amplitude,
                    args.amplitude, args.amplitude, args.amplitude]
+        if args.only_gripper:
+            offsets = []
+        for joint_index, offset in enumerate(offsets):
+            target = list(home)
+            target[joint_index] += offset
+            _check_motion_target(target, lower, upper, joint_index)
+        eeff = None
+        if not args.skip_gripper:
+            eeff = robot.get_eeff_config()
+            lower_eeff = float(eeff.get("eeff_lower", [0.0])[0])
+            upper_eeff = float(eeff.get("eeff_upper", [0.077])[0])
+            if eeff.get("eeff_type") != "gripper" or not robot.get_eeff_connect():
+                raise RuntimeError("configured gripper is not connected")
+            if not (math.isfinite(lower_eeff) and math.isfinite(upper_eeff) and
+                    lower_eeff <= args.gripper_open <= upper_eeff):
+                raise RuntimeError("--gripper-open is outside the configured gripper limits")
+            if args.gripper_open - lower_eeff <= 2 * args.gripper_tolerance:
+                raise RuntimeError("gripper travel must exceed twice --gripper-tolerance")
+            _print("planned_gripper", {"open": args.gripper_open, "close": lower_eeff,
+                                      "tolerance": args.gripper_tolerance})
         _print("planned_offsets", offsets)
         if not args.yes:
             input("确认周围无障碍物后按回车开始运动测试，Ctrl+C 可中止: ")
@@ -127,39 +176,32 @@ def main() -> int:
         for joint_index, offset in enumerate(offsets):
             target = list(home)
             target[joint_index] += offset
-            _check_motion_target(target, lower, upper, joint_index)
             _print(f"joint_{joint_index}_target", target[joint_index])
 
             code = robot.move_joint(target, desire_time=args.move_time, is_sync=True)
             time.sleep(0.2)
             observed = [float(value) for value in robot.get_joint_pos()]
+            if code != 1:
+                raise RuntimeError(f"joint {joint_index} outward move failed: {code}")
+            _check_feedback(observed, target, args.joint_tolerance, f"joint {joint_index} outward")
             _print(
                 f"joint_{joint_index}_out",
                 {"code": code, "target": target[joint_index], "observed": observed[joint_index]},
             )
-            if code != 1:
-                raise RuntimeError(f"joint {joint_index} outward move failed: {code}")
 
             code = robot.move_joint(list(home), desire_time=args.move_time, is_sync=True)
             time.sleep(0.2)
             returned = [float(value) for value in robot.get_joint_pos()]
+            if code != 1:
+                raise RuntimeError(f"joint {joint_index} return failed: {code}")
+            _check_feedback(returned, home, args.joint_tolerance, f"joint {joint_index} return")
             _print(
                 f"joint_{joint_index}_return",
                 {"code": code, "observed": returned[joint_index],
                  "error": returned[joint_index] - home[joint_index]},
             )
-            if code != 1:
-                raise RuntimeError(f"joint {joint_index} return failed: {code}")
 
         if not args.skip_gripper:
-            eeff = robot.get_eeff_config()
-            lower_eeff = float(eeff.get("eeff_lower", [0.0])[0])
-            upper_eeff = float(eeff.get("eeff_upper", [0.077])[0])
-            if eeff.get("eeff_type") != "gripper":
-                raise RuntimeError(f"A3 end effector is not a gripper: {eeff}")
-            if not lower_eeff <= args.gripper_open <= upper_eeff:
-                raise RuntimeError("--gripper-open is outside the configured gripper limits")
-
             _print(
                 "gripper_precheck",
                 {"type": eeff.get("eeff_type"), "connected": robot.get_eeff_connect(),
@@ -168,15 +210,21 @@ def main() -> int:
             )
             code = robot.set_gripper(args.gripper_open, tau=args.gripper_torque)
             time.sleep(1.5)
-            _print("gripper_open", {"code": code, "observed": robot.get_gripper_pos()})
+            observed_gripper = robot.get_gripper_pos()
+            _print("gripper_open", {"code": code, "observed": observed_gripper})
             if code != 1:
                 raise RuntimeError(f"gripper open failed: {code}")
+            _check_feedback([observed_gripper], [args.gripper_open],
+                            args.gripper_tolerance, "gripper open")
 
             code = robot.set_gripper(lower_eeff, tau=args.gripper_torque)
             time.sleep(1.5)
-            _print("gripper_close", {"code": code, "observed": robot.get_gripper_pos()})
+            observed_gripper = robot.get_gripper_pos()
+            _print("gripper_close", {"code": code, "observed": observed_gripper})
             if code != 1:
                 raise RuntimeError(f"gripper close failed: {code}")
+            _check_feedback([observed_gripper], [lower_eeff],
+                            args.gripper_tolerance, "gripper close")
 
         final_status = robot.get_status()
         _print(

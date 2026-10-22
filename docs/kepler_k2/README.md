@@ -4,6 +4,15 @@
 
 等待接入官方api。当前提供模拟后端，可验证关节映射与 DDS 转发。
 
+## 一行命令验证
+
+```bash
+python3 scripts/verify_robot.py k2 offline
+```
+
+自动编译并运行模拟适配器与公共链路测试，正常应显示 `100% tests passed` 和 `[PASS] k2/offline`。
+结果摘要保存在 `logs/verification/`；该命令不验证真实电机。
+
 ## 编译与运行
 
 ```bash
