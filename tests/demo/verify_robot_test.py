@@ -44,6 +44,13 @@ class VerificationTest(unittest.TestCase):
         run.assert_not_called()
         mkdir.assert_not_called()
 
+    def test_d3_routes_only_read_only_plans(self):
+        for feature in ('joints', 'plan'):
+            args = runner.parse_args(['d3', feature])
+            command = runner.commands(args, Path('/tmp/output'))[-1]
+            self.assertIn('--check', command)
+            self.assertEqual(runner.CASES[('d3', feature)].verdict, 'READ_ONLY_OK')
+
     def test_build_failure_stops_before_hardware(self):
         with tempfile.TemporaryDirectory() as temp, \
              patch.object(runner, 'ROOT', Path(temp)), \

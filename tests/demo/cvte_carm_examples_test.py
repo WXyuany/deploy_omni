@@ -143,8 +143,10 @@ class D3JointTest(unittest.TestCase):
         self.states = {}
         for side in ('left', 'right'):
             state = dict(arm_dof=7, arm_name='D3_' + side, servo=1,
-                         fsm_state='POSITION', state=0, task={'exe_flag': False},
-                         reality={'pose': [0.0] * 7, 'vel': [0.0] * 7})
+                         fsm_state='POSITION', state=0, vel_per=0.1, task={'exe_flag': False},
+                         reality={'pose': [0.0] * 7, 'vel': [0.0] * 7},
+                         eeff=dict(eeff_type='gripper', eeff_dof=1, is_connect=True,
+                                   eeff_state=1, eeff_pos=[0.0]))
             self.states[side] = dict(state, q=[0.0] * 7, dq=[0.0] * 7)
         self.raw = dict(count='1', debug=False, error=0, errMsg='',
                         arm=[self.states[side] for side in ('left', 'right')])
@@ -152,6 +154,8 @@ class D3JointTest(unittest.TestCase):
             getattr(self.robot, '_' + side)._impl.state = self.raw
             getattr(self.robot, 'get_' + side + '_config').return_value = {
                 'limit_lower': [-2.0] * 7, 'limit_upper': [2.0] * 7}
+            getattr(self.robot, 'get_' + side + '_eeff_config').return_value = {
+                'eeff_lower': [0.0], 'eeff_upper': [0.077], 'eeff_tau': [100.0]}
 
     def test_stale_fault_and_simulation_rejected(self):
         feedback = self.demo.Feedback(self.robot)
@@ -205,6 +209,7 @@ class D3JointTest(unittest.TestCase):
         import tempfile
         sdk = types.ModuleType('carm')
         sdk.CArmDualBot = MagicMock(return_value=self.robot)
+        self.factory = sdk.CArmDualBot
         with tempfile.TemporaryDirectory() as temp, \
              patch.dict(sys.modules, {'carm': sdk}), \
              patch.object(sys, 'argv', ['demo', '--report', str(Path(temp) / 'result.json'), *args]), \
@@ -217,22 +222,139 @@ class D3JointTest(unittest.TestCase):
             result = self.demo.main()
         return result, move
 
-    def test_check_and_cancel_send_no_control_commands(self):
-        for args in (['--check'], []):
-            result, move = self.run_demo(*args)
-            self.assertIn(result, (0, 130))
-            move.assert_not_called()
-            self.robot.set_ready.assert_not_called()
-            self.robot.emergency_stop.assert_not_called()
-            self.robot.disconnect.assert_called()
-
-    def test_failure_stops_both_arms_without_return_motion(self):
-        result, move = self.run_demo('--yes', failure=RuntimeError('feedback lost'))
-        self.assertEqual(result, 1)
-        move.assert_called_once()
-        self.robot.emergency_stop.assert_called_once()
+    def test_read_only_check_sends_no_control_commands(self):
+        result, move = self.run_demo('--check')
+        self.assertEqual(result, 0)
+        move.assert_not_called()
         self.robot.set_ready.assert_not_called()
-        self.robot.set_debug.assert_not_called()
+        self.robot.emergency_stop.assert_not_called()
+        self.robot.disconnect.assert_called()
+
+    def test_motion_modes_block_before_connection(self):
+        for args in ([], ['--yes'], ['--test', 'gripper', '--yes'],
+                     ['--test', 'all', '--yes'],
+                     ['--arm', 'right', '--joints', '2', '--amplitude', '0.20',
+                      '--move-time', '5', '--yes']):
+            with self.subTest(args=args):
+                result, move = self.run_demo(*args)
+                self.assertEqual(result, 2)
+                self.factory.assert_not_called()
+                move.assert_not_called()
+                self.robot.emergency_stop.assert_not_called()
+                self.robot.set_ready.assert_not_called()
+                self.robot.set_debug.assert_not_called()
+
+    def test_larger_joint_check_does_not_access_grippers(self):
+        result, move = self.run_demo('--check', '--test', 'joints',
+                                     '--amplitude', '0.14', '--move-time', '6')
+        self.assertEqual(result, 0)
+        move.assert_not_called()
+        for side in ('left', 'right'):
+            getattr(self.robot, 'get_' + side + '_eeff_config').assert_not_called()
+            getattr(self.robot, 'set_' + side + '_gripper').assert_not_called()
+
+    def test_larger_offset_requires_bounded_speed_and_range(self):
+        for amplitude, seconds in (('0.20', '4'), ('0.21', '6')):
+            with patch.object(sys, 'argv', ['demo', '--amplitude', amplitude, '--move-time', seconds]), \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.demo.parse_args()
+
+    def test_faster_larger_check_sends_no_control_commands(self):
+        result, move = self.run_demo('--check', '--test', 'joints', '--arm', 'left',
+                                     '--joints', '1', '--amplitude', '0.20',
+                                     '--move-time', '5', '--pause', '0')
+        self.assertEqual(result, 0)
+        move.assert_not_called()
+        self.robot.emergency_stop.assert_not_called()
+        self.robot.set_ready.assert_not_called()
+        for side in ('left', 'right'):
+            getattr(self.robot, 'set_' + side + '_gripper').assert_not_called()
+
+    def test_measured_overspeed_is_still_rejected(self):
+        self.states['left']['reality']['vel'][0] = 0.1001
+        with self.assertRaisesRegex(RuntimeError, 'exceeds 0.1 rad/s'):
+            self.demo.Feedback(self.robot).read()
+
+    def test_invalid_speed_blocks_before_motion_or_stop(self):
+        for speed in (0, -0.1, None, True, float('nan'), 1.1):
+            with self.subTest(speed=speed), patch.dict(self.states['left'], vel_per=speed):
+                result, move = self.run_demo('--check', '--arm', 'left', '--joints', '1')
+                self.assertEqual(result, 1)
+                move.assert_not_called()
+                self.robot.emergency_stop.assert_not_called()
+                self.robot.set_ready.assert_not_called()
+
+    def test_zero_speed_is_rechecked_before_each_command(self):
+        feedback = MagicMock()
+        feedback.read.return_value = self.states
+        self.states['left']['vel_per'] = 0
+        with self.assertRaisesRegex(RuntimeError, 'vel_per=0'):
+            self.demo.move_and_wait(self.robot, feedback,
+                dict(left=[0.0] * 7, right=[0.0] * 7),
+                dict(side='left', joint=1, offset=0.035), [0.035] + [0.0] * 6, 4)
+        self.robot.move_left_joint.assert_not_called()
+
+    def test_sdk_rejection_is_preserved_without_recovery_or_retry(self):
+        reply = {'recv': 'Task_Reject', 'error': 42, 'errMsg': 'controller stopped'}
+        impl = self.robot._left._impl
+        original = impl.request
+        original.return_value = reply
+        trace = self.demo.RequestTrace(self.robot)
+        payload = {'command': 'webRecieveTasks', 'task_id': 'TASK_PVT'}
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(impl.request(payload), reply)
+        self.assertEqual(trace.entries[0]['request'], payload)
+        self.assertEqual(trace.entries[0]['response'], reply)
+        self.assertEqual(trace.entries[0]['controller_state'], self.raw)
+        original.assert_called_once()
+        self.robot.set_ready.assert_not_called()
+        impl.recover.assert_not_called()
+        trace.close()
+        self.assertIs(impl.request, original)
+
+    def test_gripper_plan_rejects_limits_force_and_disconnection(self):
+        configs = {side: getattr(self.robot, 'get_' + side + '_eeff_config')()
+                   for side in ('left', 'right')}
+        moves = self.demo.plan_grippers(self.states, configs, ('left', 'right'), 0.03, 0.005, 5)
+        self.assertEqual(len(moves), 4)
+        configs['left']['eeff_tau'] = [2.0]
+        with self.assertRaisesRegex(RuntimeError, 'force'):
+            self.demo.plan_grippers(self.states, configs, ('left',), 0.03, 0.005, 5)
+        with self.assertRaisesRegex(RuntimeError, 'outside limits'):
+            self.demo.plan_grippers(self.states, configs, ('left',), 0.1, 0.005, 1)
+        self.states['left']['eeff']['is_connect'] = False
+        with self.assertRaisesRegex(RuntimeError, 'connected'):
+            self.demo.plan_grippers(self.states, configs, ('left',), 0.03, 0.005, 1)
+
+    def test_gripper_command_and_actual_feedback(self):
+        for moving in (False, True):
+            with self.subTest(moving=moving):
+                self.setUp()
+                feedback = MagicMock()
+                feedback.read.return_value = self.states
+                def grip(target, **kwargs):
+                    if moving:
+                        self.states['left']['eeff']['eeff_pos'] = [target]
+                    return 1
+                self.robot.set_left_gripper.side_effect = grip
+                clock = [0.0]
+                def sleep(seconds):
+                    clock[0] += seconds
+                move = dict(side='left', target=0.03, force=5)
+                home = dict(left=[0.0] * 7, right=[0.0] * 7)
+                with patch.object(self.demo.time, 'monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(self.demo.time, 'sleep', side_effect=sleep):
+                    if moving:
+                        result = self.demo.grip_and_wait(self.robot, feedback, home, move)
+                        self.assertAlmostEqual(result['observed'], 0.03)
+                        self.robot.set_left_gripper.assert_called_once_with(0.03, tau=5)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'after timeout'):
+                            self.demo.grip_and_wait(self.robot, feedback, home, move)
+                        self.robot.set_left_gripper.assert_called_once()
+                self.robot.move_left_joint.assert_not_called()
+                self.robot.move_right_joint.assert_not_called()
+                self.robot.set_right_gripper.assert_not_called()
 
 
 if __name__ == '__main__':
