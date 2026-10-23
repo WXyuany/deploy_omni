@@ -68,6 +68,10 @@ for feature, selection in (('joints', '--skip-gripper'), ('gripper', '--only-gri
          '--port', '{port}', '--amplitude', '0.15', '--move-time', '3') +
         ((selection,) if selection else ()),
         'Motion confirmed by operator; feedback checked against configured tolerances.')
+CASES[('d3', 'joints')] = Case('', (),
+    ('{python}', 'examples/cvte_carm/dual_joint_demo.py', '--ip', '{ip}',
+     '--port', '{port}', '--report', '{output}/joints.json'),
+    'Both arms: seven joints each, 0.035 rad timed moves and returns; live feedback checked.')
 
 
 def positive(value):

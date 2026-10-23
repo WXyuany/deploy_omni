@@ -1,5 +1,6 @@
 """Offline SDK doubles: verify reads and interruption paths without hardware."""
 import contextlib
+import copy
 import importlib.util
 import io
 from pathlib import Path
@@ -131,6 +132,107 @@ class CarmExamplesTest(unittest.TestCase):
                     self.run_motion(robot, sdk, *arguments)
                 robot.set_ready.assert_not_called()
                 robot.move_joint.assert_not_called()
+
+
+class D3JointTest(unittest.TestCase):
+    def setUp(self):
+        self.demo = load('dual_joint_demo')
+        self.robot = MagicMock()
+        self.robot.is_connected.return_value = True
+        self.robot.emergency_stop.return_value = 1
+        self.states = {}
+        for side in ('left', 'right'):
+            state = dict(arm_dof=7, arm_name='D3_' + side, servo=1,
+                         fsm_state='POSITION', state=0, task={'exe_flag': False},
+                         reality={'pose': [0.0] * 7, 'vel': [0.0] * 7})
+            self.states[side] = dict(state, q=[0.0] * 7, dq=[0.0] * 7)
+        self.raw = dict(count='1', debug=False, error=0, errMsg='',
+                        arm=[self.states[side] for side in ('left', 'right')])
+        for side in ('left', 'right'):
+            getattr(self.robot, '_' + side)._impl.state = self.raw
+            getattr(self.robot, 'get_' + side + '_config').return_value = {
+                'limit_lower': [-2.0] * 7, 'limit_upper': [2.0] * 7}
+
+    def test_stale_fault_and_simulation_rejected(self):
+        feedback = self.demo.Feedback(self.robot)
+        with patch.object(self.demo.time, 'monotonic', return_value=10):
+            feedback.read(idle=True)
+        with patch.object(self.demo.time, 'monotonic', return_value=11):
+            with self.assertRaisesRegex(RuntimeError, 'older'):
+                feedback.read()
+        for key, value in (('debug', True), ('error', 3001)):
+            with self.subTest(key=key), patch.dict(self.raw, {key: value}):
+                with self.assertRaises(RuntimeError):
+                    self.demo.Feedback(self.robot).read()
+
+    def test_plan_respects_limits_and_does_not_mutate_home(self):
+        home = dict(left=[0.0] * 7, right=[0.0] * 7)
+        limits = {side: {'limit_lower': [-2.0] * 7, 'limit_upper': [2.0] * 7}
+                  for side in ('left', 'right')}
+        limits['left']['limit_upper'][0] = 0.02
+        moves = self.demo.plan_moves(home, limits, ('left',), [1], 0.035)
+        self.assertEqual(moves[0]['offset'], -0.035)
+        self.assertEqual(home['left'], [0.0] * 7)
+        limits['left']['limit_lower'][0] = -0.02
+        with self.assertRaises(RuntimeError):
+            self.demo.plan_moves(home, limits, ('left',), [1], 0.035)
+
+    def test_other_arm_displacement_rejected(self):
+        states = copy.deepcopy(self.states)
+        states['right']['q'][3] = 0.02
+        with self.assertRaisesRegex(RuntimeError, 'right J4'):
+            self.demo.check_envelope(states, dict(left=[0.0] * 7, right=[0.0] * 7),
+                                     'left', 1, 0.035)
+
+    def test_success_response_without_movement_times_out(self):
+        feedback = MagicMock()
+        feedback.read.return_value = self.states
+        self.robot.move_left_joint.return_value = 1
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+        move = dict(side='left', joint=1, offset=0.035)
+        with patch.object(self.demo.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(self.demo.time, 'sleep', side_effect=sleep):
+            with self.assertRaisesRegex(RuntimeError, 'timeout'):
+                self.demo.move_and_wait(self.robot, feedback,
+                    dict(left=[0.0] * 7, right=[0.0] * 7), move, [0.035] + [0.0] * 6, 4)
+        self.robot.move_left_joint.assert_called_once()
+        self.assertFalse(self.robot.move_left_joint.call_args.kwargs['is_sync'])
+        self.robot.move_right_joint.assert_not_called()
+
+    def run_demo(self, *args, failure=None):
+        import tempfile
+        sdk = types.ModuleType('carm')
+        sdk.CArmDualBot = MagicMock(return_value=self.robot)
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.dict(sys.modules, {'carm': sdk}), \
+             patch.object(sys, 'argv', ['demo', '--report', str(Path(temp) / 'result.json'), *args]), \
+             patch.object(self.demo, 'Feedback') as feedback, \
+             patch.object(self.demo, 'move_and_wait', side_effect=failure) as move, \
+             patch.object(self.demo.time, 'sleep'), \
+             patch('builtins.input', side_effect=KeyboardInterrupt), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            feedback.return_value.read.return_value = self.states
+            result = self.demo.main()
+        return result, move
+
+    def test_check_and_cancel_send_no_control_commands(self):
+        for args in (['--check'], []):
+            result, move = self.run_demo(*args)
+            self.assertIn(result, (0, 130))
+            move.assert_not_called()
+            self.robot.set_ready.assert_not_called()
+            self.robot.emergency_stop.assert_not_called()
+            self.robot.disconnect.assert_called()
+
+    def test_failure_stops_both_arms_without_return_motion(self):
+        result, move = self.run_demo('--yes', failure=RuntimeError('feedback lost'))
+        self.assertEqual(result, 1)
+        move.assert_called_once()
+        self.robot.emergency_stop.assert_called_once()
+        self.robot.set_ready.assert_not_called()
+        self.robot.set_debug.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -28,12 +28,13 @@ class VerificationTest(unittest.TestCase):
             self.assertNotIn('adapter_bridge', ' '.join(command))
 
     def test_motion_keeps_confirmation(self):
-        for feature in ('joints', 'gripper', 'joint-gripper'):
-            args = runner.parse_args(['a3', feature])
+        for model, feature in (('a3', 'joints'), ('a3', 'gripper'),
+                               ('a3', 'joint-gripper'), ('d3', 'joints')):
+            args = runner.parse_args([model, feature])
             command = runner.commands(args, Path('/tmp/output'))[-1]
             self.assertNotIn('--yes', command)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            runner.parse_args(['d3', 'joints'])
+            runner.parse_args(['d3', 'joint-gripper'])
 
     def test_dry_run_never_builds_connects_or_writes(self):
         with patch.object(runner, 'execute') as run, \
