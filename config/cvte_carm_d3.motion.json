@@ -1,0 +1,16 @@
+{
+  "reference": "D3 small-offset field tests, 2026-10-23",
+  "max_amplitude_rad": 0.035,
+  "min_move_time_seconds": 4.0,
+  "start_tolerance_rad": 0.005,
+  "arms": {
+    "left": {
+      "name": "D3_AC_C_l",
+      "position": [-0.000168738, -0.000007670, 0.001257864, -0.000084369, 0.000004794, -0.000019175, -0.000004794]
+    },
+    "right": {
+      "name": "D3_AC_C_r",
+      "position": [0.000659612, 0.000782330, 0.000613592, 0.000184078, 0.0, -0.000019175, -0.000004794]
+    }
+  }
+}

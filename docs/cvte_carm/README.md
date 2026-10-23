@@ -7,7 +7,7 @@
 | 设备 | 配置与状态 |
 |---|---|
 | A3 单臂 | 6 个运动关节＋1 个夹爪，已做关节与夹爪现场测试 |
-| D3 双臂 | 左右各 7 关节，支持状态读取与只读计划预检 |
+| D3 双臂 | 左右各 7 关节，支持状态读取、计划预检与小幅关节测试 |
 
 ## 连接与编译
 
@@ -50,10 +50,11 @@ python -m pip install /opt/cvte/arm_control_sdk/carm_python
 | A3 6 关节＋夹爪 | `python3 scripts/verify_robot.py a3 joint-gripper` | 上述两项依次完成，最终 `PASS` |
 | D3 左右臂状态，只读 | `python3 scripts/verify_robot.py d3 state` | 默认共 14 关节，状态与连接健康，结果 `PASS` |
 | D3 关节计划，只读 | `python3 scripts/verify_robot.py d3 plan` | 读取双臂状态与限位、打印计划，结果 `READ_ONLY_OK`，不执行运动 |
+| D3 逐个测试 14 关节 | `python3 scripts/verify_robot.py d3 joints` | 核对起始姿态后，每关节偏移约 2° 并返回，结果 `PASS` |
 | Python 示例离线回归 | `python3 scripts/verify_robot.py a3 offline` | SDK 替身测试显示 `OK`，不连接机器人 |
 
 运动命令会显示计划，等待回车确认后执行。准备好急停，Ctrl+C 中止。`PASS` 只代表本次设定幅度与容差下的检查通过。
-结果摘要保存在 `logs/verification/`。D3 运动示例暂仅开放只读预检，运动路径待审核；程序不自动清错或解除急停。
+结果摘要保存在 `logs/verification/`。程序不自动清错或解除急停。
 
 ## A3 单臂
 
@@ -116,7 +117,24 @@ python examples/cvte_carm/dual_joint_demo.py --check
 python examples/cvte_carm/dual_joint_demo.py --check --arm left --joints 1
 ```
 
-`--check` 通过只表示状态与计划格式检查通过，不代表路径已完成运动验证。未带 `--check` 的调用在连接控制器前退出。旧的 `d3 joints` 入口同样仅运行只读预检。
+`--check` 通过只表示状态与计划格式检查通过，不代表路径已完成运动验证。
+
+### 小幅逐关节测试
+
+```bash
+python3 scripts/verify_robot.py d3 joints
+```
+
+先左臂 J1–J7，再右臂 J1–J7；幅度上限 0.035 rad（约 2°），每段至少 4 秒，段间额外等待为 0。按回车开始，Ctrl+C 尝试停止双臂并退出。
+
+只测试单个关节：
+
+```bash
+python examples/cvte_carm/dual_joint_demo.py --enable-motion --arm left --joints 1 --amplitude 0.035 --move-time 4 --pause 0
+```
+
+起始姿态按 [D3 小幅测试配置](../../config/cvte_carm_d3.motion.json) 检查，双臂每个关节与参考值的偏差不超过 0.005 rad；不满足时退出，不自动移动到参考姿态。确认机身和周围物体均不在运动路径内再执行，姿态检查不具备防碰撞能力。
+反馈过期、异常位移、实测关节速度超过 0.1 rad/s 或到位超时会尝试停止；失败或中断后不自动回位。
 
 ### 双臂调用与配置
 

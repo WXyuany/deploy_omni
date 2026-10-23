@@ -142,7 +142,7 @@ class D3JointTest(unittest.TestCase):
         self.robot.emergency_stop.return_value = 1
         self.states = {}
         for side in ('left', 'right'):
-            state = dict(arm_dof=7, arm_name='D3_' + side, servo=1,
+            state = dict(arm_dof=7, arm_name='D3_AC_C_' + side[0], servo=1,
                          fsm_state='POSITION', state=0, vel_per=0.1, task={'exe_flag': False},
                          reality={'pose': [0.0] * 7, 'vel': [0.0] * 7},
                          eeff=dict(eeff_type='gripper', eeff_dof=1, is_connect=True,
@@ -243,6 +243,30 @@ class D3JointTest(unittest.TestCase):
                 self.robot.emergency_stop.assert_not_called()
                 self.robot.set_ready.assert_not_called()
                 self.robot.set_debug.assert_not_called()
+
+    def test_large_or_gripper_motion_blocks_before_connection(self):
+        for args in (['--amplitude', '0.20', '--move-time', '5'],
+                     ['--test', 'gripper'], ['--test', 'all']):
+            with self.subTest(args=args):
+                result, move = self.run_demo('--enable-motion', '--yes', *args)
+                self.assertEqual(result, 2)
+                self.factory.assert_not_called()
+                move.assert_not_called()
+
+    def test_reference_posture_blocks_motion_without_clearing_stop(self):
+        self.states['right']['q'][1] = 0.02
+        result, move = self.run_demo('--enable-motion', '--yes')
+        self.assertEqual(result, 1)
+        move.assert_not_called()
+        self.robot.emergency_stop.assert_not_called()
+        self.robot.set_ready.assert_not_called()
+
+    def test_small_joint_motion_keeps_failure_stop_and_no_automatic_return(self):
+        result, move = self.run_demo('--enable-motion', '--yes', failure=RuntimeError('feedback lost'))
+        self.assertEqual(result, 1)
+        move.assert_called_once()
+        self.robot.emergency_stop.assert_called_once()
+        self.robot.set_ready.assert_not_called()
 
     def test_larger_joint_check_does_not_access_grippers(self):
         result, move = self.run_demo('--check', '--test', 'joints',

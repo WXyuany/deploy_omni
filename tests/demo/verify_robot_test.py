@@ -44,12 +44,17 @@ class VerificationTest(unittest.TestCase):
         run.assert_not_called()
         mkdir.assert_not_called()
 
-    def test_d3_routes_only_read_only_plans(self):
-        for feature in ('joints', 'plan'):
-            args = runner.parse_args(['d3', feature])
-            command = runner.commands(args, Path('/tmp/output'))[-1]
-            self.assertIn('--check', command)
-            self.assertEqual(runner.CASES[('d3', feature)].verdict, 'READ_ONLY_OK')
+    def test_d3_separates_read_only_plan_from_small_motion(self):
+        args = runner.parse_args(['d3', 'plan'])
+        command = runner.commands(args, Path('/tmp/output'))[-1]
+        self.assertIn('--check', command)
+        self.assertEqual(runner.CASES[('d3', 'plan')].verdict, 'READ_ONLY_OK')
+        args = runner.parse_args(['d3', 'joints'])
+        command = runner.commands(args, Path('/tmp/output'))[-1]
+        self.assertIn('--enable-motion', command)
+        self.assertEqual(command[command.index('--amplitude') + 1], '0.035')
+        self.assertEqual(command[command.index('--move-time') + 1], '4')
+        self.assertNotIn('--yes', command)
 
     def test_build_failure_stops_before_hardware(self):
         with tempfile.TemporaryDirectory() as temp, \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect D3 feedback and joint plans; motion execution is disabled pending path review."""
+"""Inspect D3 joint plans or explicitly run small joint tests from a reference posture."""
 import argparse
 import copy
 from datetime import datetime, timezone
@@ -113,6 +113,29 @@ def require_motion_speed(states, sides):
             raise RuntimeError(
                 f'{side}: invalid motion speed scale vel_per={value!r}; '
                 'confirm stop recovery and a nonzero speed in the official UI')
+
+
+def load_motion_profile(args):
+    path = Path(__file__).resolve().parents[2] / 'config/cvte_carm_d3.motion.json'
+    profile = json.loads(path.read_text())
+    if args.test != 'joints':
+        raise RuntimeError('Motion execution supports joint tests only')
+    if args.amplitude > profile['max_amplitude_rad'] or args.move_time < profile['min_move_time_seconds']:
+        raise RuntimeError('D3 motion requires amplitude <= 0.035 rad and move-time >= 4 seconds')
+    return profile
+
+
+def require_reference_posture(states, profile):
+    for side in SIDES:
+        expected = profile['arms'][side]
+        reference = vector(expected['position'], side + ' reference posture')
+        if states[side]['arm_name'] != expected['name']:
+            raise RuntimeError(f'{side}: robot model does not match the motion profile')
+        error = max(abs(actual - target) for actual, target in zip(states[side]['q'], reference))
+        if error > profile['start_tolerance_rad']:
+            raise RuntimeError(
+                f'{side}: current posture differs from the reference by {error:.6f} rad; '
+                'inspect and position the robot on site before retrying; no automatic repositioning')
 
 
 def plan_moves(home, limits, sides, joints, amplitude):
@@ -254,7 +277,9 @@ def parse_args():
     parser.add_argument('--gripper-open', type=float, default=0.03)
     parser.add_argument('--gripper-close', type=float, default=0.005)
     parser.add_argument('--gripper-force', type=float, default=5)
-    parser.add_argument('--check', action='store_true', help='read state/limits and print plan only')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--check', action='store_true', help='read state/limits and print plan only')
+    mode.add_argument('--enable-motion', action='store_true', help='run small joint tests from the reference posture')
     parser.add_argument('--yes', action='store_true', help='operator has confirmed clear space and emergency stop')
     parser.add_argument('--report', type=Path)
     args = parser.parse_args()
@@ -281,10 +306,17 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if not args.check:
-        print('D3 motion execution is disabled pending path review. Use --check for read-only inspection.',
+    if not (args.check or args.enable_motion):
+        print('Select --check for read-only inspection or --enable-motion for small joint tests.',
               file=sys.stderr, flush=True)
         return 2
+    profile = None
+    if args.enable_motion:
+        try:
+            profile = load_motion_profile(args)
+        except (OSError, ValueError, RuntimeError) as error:
+            print('ERROR: ' + str(error), file=sys.stderr, flush=True)
+            return 2
     from carm import CArmDualBot
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     report_path = args.report or Path(__file__).resolve().parents[2] / f'logs/verification/d3-joints-{stamp}.json'
@@ -301,6 +333,9 @@ def main():
         time.sleep(0.5)
         feedback = Feedback(robot)
         states = feedback.read(idle=True)
+        if profile is not None:
+            require_reference_posture(states, profile)
+            report['motion_profile'] = profile
         home = {side: states[side]['q'] for side in SIDES}
         limits = {side: getattr(robot, 'get_' + side + '_config')() for side in SIDES}
         sides = SIDES if args.arm == 'both' else (args.arm,)
@@ -325,9 +360,10 @@ def main():
             report['result'] = 'READ_ONLY_OK'
         else:
             if not args.yes:
-                input('确认两臂周围无人无障碍、可随时急停后按回车开始，Ctrl+C 取消: ')
+                input('确认双臂全程不会接触机身或障碍、可随时急停后按回车开始，Ctrl+C 取消: ')
             states = feedback.read(idle=True)
             report['pre_motion'] = states
+            require_reference_posture(states, profile)
             if moves:
                 require_motion_speed(states, sides)
             if any(abs(a - b) > TOLERANCE for side in SIDES for a, b in zip(states[side]['q'], home[side])):

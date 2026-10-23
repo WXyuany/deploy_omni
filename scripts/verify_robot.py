@@ -70,9 +70,13 @@ for feature, selection in (('joints', '--skip-gripper'), ('gripper', '--only-gri
         'Motion confirmed by operator; feedback checked against configured tolerances.')
 CASES[('d3', 'joints')] = Case('', (),
     ('{python}', 'examples/cvte_carm/dual_joint_demo.py', '--ip', '{ip}',
-     '--port', '{port}', '--check', '--report', '{output}/joints.json'),
-    'Read-only D3 feedback and joint plan inspection; motion execution is disabled.', 'READ_ONLY_OK')
-CASES[('d3', 'plan')] = CASES[('d3', 'joints')]
+     '--port', '{port}', '--enable-motion', '--amplitude', '0.035', '--move-time', '4',
+     '--pause', '0', '--report', '{output}/joints.json'),
+    'D3 reference posture checked; 14 joints tested with 0.035 rad out/return moves.')
+CASES[('d3', 'plan')] = Case('', (),
+    ('{python}', 'examples/cvte_carm/dual_joint_demo.py', '--ip', '{ip}',
+     '--port', '{port}', '--check', '--report', '{output}/plan.json'),
+    'Read-only D3 feedback and joint plan inspection.', 'READ_ONLY_OK')
 
 
 def positive(value):
