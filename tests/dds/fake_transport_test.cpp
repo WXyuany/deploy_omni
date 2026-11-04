@@ -190,6 +190,8 @@ class RecordingEventSink final : public bridge::core::BridgeRuntimeEventSink {
     return {.status = RunnerCallStatus::kOk, .detail = "reported", .fault = std::nullopt};
   }
 
+  void notify_state_available() override {}
+
   std::optional<bridge::core::BridgeFault> last_fault;
 };
 
@@ -333,7 +335,7 @@ void TestStateEgressRejectsInvalidPublishedState() {
       .linear_acceleration_xyz = {0.0, 0.1, 9.81},
   };
 
-  const auto result = egress.publish(invalid_state);
+  const auto result = egress.publish(invalid_state, bridge::core::RobotAuxStateSnapshot{});
   assert(result.status == RunnerCallStatus::kRejected);
 }
 

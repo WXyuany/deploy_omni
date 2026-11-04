@@ -11,6 +11,8 @@ set(MSG_FILES
   msg/JointState.msg
   msg/ImuInfo.msg
   msg/MotionState.msg
+  msg/PowerInfo.msg
+  msg/Alert.msg
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}

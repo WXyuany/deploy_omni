@@ -18,6 +18,12 @@
 #if BRIDGE_BUILD_UNITREE_G1
 #include "../../../include/bridge/adapters/unitree_g1/unitree_g1_adapter.hpp"
 #endif
+#if BRIDGE_BUILD_CVTE_CARM
+#include "../../../include/bridge/adapters/cvte_carm/cvte_carm_adapter.hpp"
+#endif
+#if BRIDGE_BUILD_AGIBOT_X2
+#include "../../../include/bridge/adapters/agibot_x2/agibot_x2_adapter.hpp"
+#endif
 #include "../../../include/bridge/dds/dds_factory.hpp"
 #include "../../../include/bridge/extensions/hooks.hpp"
 #if BRIDGE_BUILD_GAMEPAD_SDL
@@ -128,8 +134,11 @@ class NoopStateEgress final : public core::BridgeStateEgress {
             .fault = std::nullopt};
   }
 
-  core::RunnerCallResult publish(core::StateFrame& state) override {
+  core::RunnerCallResult publish(
+      core::StateFrame& state,
+      const core::RobotAuxStateSnapshot& aux_state) override {
     (void)state;
+    (void)aux_state;
     return {.status = core::RunnerCallStatus::kOk,
             .detail = "noop state egress published",
             .fault = std::nullopt};
@@ -311,6 +320,134 @@ struct Pm01AdapterConfigBuildResult {
 }
 #endif
 
+#if BRIDGE_BUILD_CVTE_CARM
+struct CvteCarmAdapterConfigBuildResult {
+  std::optional<adapters::cvte_carm::CvteCarmAdapterConfig> config;
+  std::string detail;
+
+  [[nodiscard]] bool succeeded() const noexcept { return config.has_value(); }
+};
+
+[[nodiscard]] CvteCarmAdapterConfigBuildResult to_cvte_carm_adapter_config(
+    const config::BridgeStartupConfig& startup_config) {
+  adapters::cvte_carm::CvteCarmAdapterConfig config;
+  if (startup_config.robot_type == "cvte_carm_a3") {
+    config.model = adapters::cvte_carm::Model::kA3Single;
+    config.arm_selection = adapters::cvte_carm::ArmSelection::kSingle;
+  } else if (startup_config.robot_type == "cvte_carm_d3" ||
+             startup_config.robot_type == "cvte_carm_d3_left" ||
+             startup_config.robot_type == "cvte_carm_d3_right") {
+    config.model = adapters::cvte_carm::Model::kD3Dual;
+    config.arm_selection = startup_config.robot_type == "cvte_carm_d3_left"
+                               ? adapters::cvte_carm::ArmSelection::kLeft
+                               : startup_config.robot_type == "cvte_carm_d3_right"
+                                     ? adapters::cvte_carm::ArmSelection::kRight
+                                     : adapters::cvte_carm::ArmSelection::kBoth;
+  } else {
+    return {.config = std::nullopt,
+            .detail = "unsupported CVTE CArm robot type '" + startup_config.robot_type + "'"};
+  }
+
+  config.session.robot_id = startup_config.adapter.robot_name;
+  config.session.server_ip = startup_config.adapter.connection.interface_hint;
+  config.session.control_profile = startup_config.adapter.command_mode;
+  config.safety.require_initial_state_before_motion =
+      startup_config.adapter.startup.require_healthy_hardware;
+  config.joint_names = startup_config.adapter.joint_names;
+  config.hardware_slot_count = configured_hardware_width(startup_config.joint_map_entries);
+  if (config.model == adapters::cvte_carm::Model::kD3Dual) {
+    if (config.joint_names.empty()) {
+      return {.config = std::nullopt,
+              .detail = "cvte_carm_d3 requires a non-empty joint mapping"};
+    }
+    if (config.arm_selection == adapters::cvte_carm::ArmSelection::kBoth) {
+      if (config.joint_names.size() % 2 != 0) {
+        return {.config = std::nullopt,
+                .detail = "cvte_carm_d3 both-arm mode requires an even joint mapping width"};
+      }
+      config.arm_joint_count = config.joint_names.size() / 2U;
+    } else {
+      config.arm_joint_count = config.joint_names.size();
+    }
+  }
+  return {.config = std::move(config),
+          .detail = "built CVTE CArm adapter config from startup config"};
+}
+
+[[nodiscard]] RobotAssemblyCreateResult create_cvte_carm_assembly(
+    const config::BridgeStartupConfig& startup_config) {
+  const config::JointMapBuildResult joint_map_result = config::JointMap::build(
+      startup_config.joint_map_entries, startup_config.joint_map_validation);
+  if (!joint_map_result.succeeded() || !joint_map_result.joint_map.has_value()) {
+    return {.status = RobotAssemblyCreateStatus::kInvalidConfig,
+            .detail = "joint-map build failed during CVTE CArm assembly",
+            .assembly = std::nullopt};
+  }
+
+  const CvteCarmAdapterConfigBuildResult adapter_config_result =
+      to_cvte_carm_adapter_config(startup_config);
+  if (!adapter_config_result.succeeded()) {
+    return {.status = RobotAssemblyCreateStatus::kInvalidConfig,
+            .detail = adapter_config_result.detail,
+            .assembly = std::nullopt};
+  }
+
+  RobotAssembly assembly{
+      .joint_map = std::move(*joint_map_result.joint_map),
+      .adapter = std::make_unique<adapters::cvte_carm::CvteCarmAdapter>(
+          std::move(*adapter_config_result.config)),
+      .command_ingress = nullptr,
+      .state_egress = nullptr,
+      .observation_hook = create_observation_hook(startup_config),
+      .gamepad_remote = create_gamepad_remote(startup_config),
+  };
+
+  attach_configured_bridge_components(startup_config, &assembly);
+  return {.status = RobotAssemblyCreateStatus::kOk,
+          .detail = "assembled CVTE CArm robot runtime",
+          .assembly = std::move(assembly)};
+}
+#endif
+
+#if BRIDGE_BUILD_AGIBOT_X2
+[[nodiscard]] RobotAssemblyCreateResult create_agibot_x2_assembly(
+    const config::BridgeStartupConfig& startup_config) {
+  const config::JointMapBuildResult joint_map_result = config::JointMap::build(
+      startup_config.joint_map_entries, startup_config.joint_map_validation);
+  if (!joint_map_result.succeeded() || !joint_map_result.joint_map.has_value()) {
+    return {.status = RobotAssemblyCreateStatus::kInvalidConfig,
+            .detail = "joint-map build failed during agibot_x2 assembly",
+            .assembly = std::nullopt};
+  }
+  adapters::agibot_x2::AgibotX2AdapterConfig config;
+  config.session.robot_id = startup_config.adapter.robot_name;
+  config.session.transport = startup_config.adapter.connection.transport;
+  config.session.interface_hint = startup_config.adapter.connection.interface_hint;
+  config.session.initialize_timeout_ns = startup_config.adapter.startup.read_initial_state_timeout_ns;
+  config.session.read_timeout_ns = startup_config.runner.loop_period_ns;
+  config.session.write_timeout_ns = startup_config.runner.loop_period_ns;
+  config.safety.require_initial_state_before_motion = startup_config.adapter.startup.require_healthy_hardware;
+  config.joint_names = startup_config.adapter.joint_names;
+  if (config.joint_names.size() != adapters::agibot_x2::kAgibotX2JointCount) {
+    return {.status = RobotAssemblyCreateStatus::kInvalidConfig,
+            .detail = "agibot_x2 requires exactly 31 enabled joint names",
+            .assembly = std::nullopt};
+  }
+  RobotAssembly assembly{
+      .joint_map = std::move(*joint_map_result.joint_map),
+      .adapter = std::make_unique<adapters::agibot_x2::AgibotX2Adapter>(std::move(config)),
+      .command_ingress = nullptr,
+      .state_egress = nullptr,
+      .observation_hook = create_observation_hook(startup_config),
+      .gamepad_remote = create_gamepad_remote(startup_config),
+  };
+  attach_configured_bridge_components(startup_config, &assembly);
+  return {.status = RobotAssemblyCreateStatus::kOk,
+          .detail = "assembled Agibot X2 robot runtime",
+          .assembly = std::move(assembly)};
+}
+#endif
+
 #if BRIDGE_BUILD_UNITREE_G1
 [[nodiscard]] RobotAssemblyCreateResult create_unitree_g1_assembly(
     const config::BridgeStartupConfig& startup_config) {
@@ -445,6 +582,15 @@ struct RobotFactoryEntry {
 #endif
 #if BRIDGE_BUILD_UNITREE_G1
       {.robot_type = "unitree_g1", .create = &create_unitree_g1_assembly},
+#endif
+#if BRIDGE_BUILD_CVTE_CARM
+      {.robot_type = "cvte_carm_a3", .create = &create_cvte_carm_assembly},
+      {.robot_type = "cvte_carm_d3", .create = &create_cvte_carm_assembly},
+      {.robot_type = "cvte_carm_d3_left", .create = &create_cvte_carm_assembly},
+      {.robot_type = "cvte_carm_d3_right", .create = &create_cvte_carm_assembly},
+#endif
+#if BRIDGE_BUILD_AGIBOT_X2
+      {.robot_type = "agibot_x2", .create = &create_agibot_x2_assembly},
 #endif
   };
   return entries;

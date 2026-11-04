@@ -8,6 +8,10 @@
 #include <utility>
 
 #include "unitree/robot/channel/channel_publisher.hpp"
+#include "unitree/idl/hg/BmsState_.hpp"
+#include "unitree/idl/hg/IMUState_.hpp"
+#include "unitree/idl/hg/LowState_.hpp"
+#include "unitree/idl/hg/MainBoardState_.hpp"
 
 namespace bridge::dds {
 namespace {
@@ -41,27 +45,85 @@ namespace {
 
 class DdsStateEgress::Impl final {
  public:
-  using Publisher = unitree::robot::ChannelPublisher<unitree_hg::msg::dds_::LowState_>;
+  template <typename Message>
+  class OptionalPublisher {
+   public:
+    bool start(const std::string& topic_name) {
+      if (topic_name.empty()) {
+        return true;
+      }
+      publisher_ =
+          std::make_unique<unitree::robot::ChannelPublisher<Message>>(topic_name);
+      publisher_->InitChannel();
+      return true;
+    }
 
-  bool start(const std::string& topic_name) {
-    publisher_ = std::make_unique<Publisher>(topic_name);
-    publisher_->InitChannel();
-    return true;
+    bool enabled() const noexcept {
+      return static_cast<bool>(publisher_);
+    }
+
+    bool publish(const Message& message) {
+      return !publisher_ || publisher_->Write(message);
+    }
+
+    void stop() {
+      if (publisher_) {
+        publisher_->CloseChannel();
+        publisher_.reset();
+      }
+    }
+
+   private:
+    std::unique_ptr<unitree::robot::ChannelPublisher<Message>> publisher_;
+  };
+
+  bool start(const DdsRuntimeConfig& config) {
+    return lowstate_publisher_.start(config.state_topic) &&
+           imu_publisher_.start(config.imu_state_topic) &&
+           bms_publisher_.start(config.bms_state_topic) &&
+           mainboard_publisher_.start(config.mainboard_state_topic);
   }
 
   bool publish(const unitree_hg::msg::dds_::LowState_& state) {
-    return publisher_ && publisher_->Write(state);
+    return lowstate_publisher_.publish(state);
+  }
+
+  bool publish_imu(const unitree_hg::msg::dds_::IMUState_& state) {
+    return imu_publisher_.publish(state);
+  }
+
+  bool publish_bms(const unitree_hg::msg::dds_::BmsState_& state) {
+    return bms_publisher_.publish(state);
+  }
+
+  bool publish_mainboard(const unitree_hg::msg::dds_::MainBoardState_& state) {
+    return mainboard_publisher_.publish(state);
+  }
+
+  bool imu_enabled() const noexcept {
+    return imu_publisher_.enabled();
+  }
+
+  bool bms_enabled() const noexcept {
+    return bms_publisher_.enabled();
+  }
+
+  bool mainboard_enabled() const noexcept {
+    return mainboard_publisher_.enabled();
   }
 
   void stop() {
-    if (publisher_) {
-      publisher_->CloseChannel();
-      publisher_.reset();
-    }
+    mainboard_publisher_.stop();
+    bms_publisher_.stop();
+    imu_publisher_.stop();
+    lowstate_publisher_.stop();
   }
 
  private:
-  std::unique_ptr<Publisher> publisher_;
+  OptionalPublisher<unitree_hg::msg::dds_::LowState_> lowstate_publisher_;
+  OptionalPublisher<unitree_hg::msg::dds_::IMUState_> imu_publisher_;
+  OptionalPublisher<unitree_hg::msg::dds_::BmsState_> bms_publisher_;
+  OptionalPublisher<unitree_hg::msg::dds_::MainBoardState_> mainboard_publisher_;
 };
 
 DdsStateEgress::DdsStateEgress(DdsStateEgressDependencies dependencies)
@@ -77,7 +139,7 @@ core::RunnerCallResult DdsStateEgress::start() {
   if (!dependencies_.runtime || !dependencies_.runtime->has_state_writer()) {
     return fatal_result("dds state egress requires initialized runtime");
   }
-  if (!impl_->start(dependencies_.runtime->config.state_topic)) {
+  if (!impl_->start(dependencies_.runtime->config)) {
     return fatal_result("failed to start cyclone state publisher");
   }
   return {.status = core::RunnerCallStatus::kOk,
@@ -85,7 +147,8 @@ core::RunnerCallResult DdsStateEgress::start() {
           .fault = std::nullopt};
 }
 
-core::RunnerCallResult DdsStateEgress::publish(core::StateFrame& state) {
+core::RunnerCallResult DdsStateEgress::publish(
+    core::StateFrame& state, const core::RobotAuxStateSnapshot& aux_state) {
   const std::uint64_t translate_start_ns = now_ns();
   const StateTranslation lowstate =
       translate_hardware_state_to_lowstate(state, dependencies_.joint_map);
@@ -98,6 +161,39 @@ core::RunnerCallResult DdsStateEgress::publish(core::StateFrame& state) {
   state.dds_write_duration_ns = now_ns() - write_start_ns;
   if (!published) {
     return fatal_result("failed to publish cyclone lowstate sample");
+  }
+  if (impl_->imu_enabled()) {
+    core::StateFrame imu_source = state;
+    if (aux_state.imu.has_value()) {
+      imu_source.imu = aux_state.imu;
+    }
+    const ImuStateTranslation imu = translate_state_to_imu_state(imu_source);
+    if (!imu.result.succeeded()) {
+      return rejected_result(imu.result.detail, imu.result.fault);
+    }
+    if (!impl_->publish_imu(*imu.state)) {
+      return fatal_result("failed to publish cyclone imu_state sample");
+    }
+  }
+  if (impl_->bms_enabled() && aux_state.bms.has_value()) {
+    const BmsStateTranslation bms =
+        translate_bms_sample_to_bms_state(*aux_state.bms);
+    if (!bms.result.succeeded()) {
+      return rejected_result(bms.result.detail, bms.result.fault);
+    }
+    if (!impl_->publish_bms(*bms.state)) {
+      return fatal_result("failed to publish cyclone bms_state sample");
+    }
+  }
+  if (impl_->mainboard_enabled() && aux_state.mainboard.has_value()) {
+    const MainBoardStateTranslation mainboard =
+        translate_mainboard_sample_to_mainboard_state(*aux_state.mainboard);
+    if (!mainboard.result.succeeded()) {
+      return rejected_result(mainboard.result.detail, mainboard.result.fault);
+    }
+    if (!impl_->publish_mainboard(*mainboard.state)) {
+      return fatal_result("failed to publish cyclone mainboard_state sample");
+    }
   }
   return {.status = core::RunnerCallStatus::kOk,
           .detail = "dds lowstate published",

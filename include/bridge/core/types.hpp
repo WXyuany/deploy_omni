@@ -64,6 +64,48 @@ enum class HealthState {
   kFaulted,
 };
 
+enum class RobotCapability : std::uint32_t {
+  kNone = 0U,
+  kJointState = 1U << 0U,
+  kJointPositionCommand = 1U << 1U,
+  kJointVelocityCommand = 1U << 2U,
+  kJointTorqueCommand = 1U << 3U,
+  kCartesianMotion = 1U << 4U,
+  kEndEffector = 1U << 5U,
+  kKinematics = 1U << 6U,
+  kTeach = 1U << 7U,
+  kImu = 1U << 8U,
+  kCamera = 1U << 9U,
+  kPointCloud = 1U << 10U,
+  kNavigation = 1U << 11U,
+  kAudio = 1U << 12U,
+  kLighting = 1U << 13U,
+};
+
+struct RobotCapabilitySet {
+  std::uint32_t bits{0U};
+
+  [[nodiscard]] constexpr bool contains(const RobotCapability capability) const noexcept {
+    return (bits & static_cast<std::uint32_t>(capability)) != 0U;
+  }
+};
+
+[[nodiscard]] constexpr RobotCapabilitySet operator|(
+    const RobotCapability left, const RobotCapability right) noexcept {
+  return {.bits = static_cast<std::uint32_t>(left) |
+                    static_cast<std::uint32_t>(right)};
+}
+
+[[nodiscard]] constexpr RobotCapabilitySet operator|(
+    const RobotCapabilitySet left, const RobotCapability right) noexcept {
+  return {.bits = left.bits | static_cast<std::uint32_t>(right)};
+}
+
+[[nodiscard]] constexpr RobotCapabilitySet operator|(
+    const RobotCapability left, const RobotCapabilitySet right) noexcept {
+  return {.bits = static_cast<std::uint32_t>(left) | right.bits};
+}
+
 struct BridgeFault {
   FaultCategory category{FaultCategory::kNone};
   FaultSeverity severity{FaultSeverity::kInfo};
@@ -161,6 +203,49 @@ struct ImuSample {
   std::int16_t temperature{0};
 };
 
+struct BmsStateSample {
+  std::uint8_t version_high{0};
+  std::uint8_t version_low{0};
+  std::uint8_t fn{0};
+  std::array<std::uint16_t, 40> cell_voltage{};
+  std::array<std::uint32_t, 3> bms_voltage{};
+  std::int32_t current{0};
+  std::uint8_t soc{0};
+  std::uint8_t soh{0};
+  std::array<std::int16_t, 12> temperature{};
+  std::uint16_t cycle{0};
+  std::uint16_t manufacturer_date{0};
+  std::array<std::uint32_t, 5> bms_state{};
+  std::array<std::uint32_t, 3> reserve{};
+};
+
+struct MainBoardStateSample {
+  std::array<std::uint16_t, 6> fan_state{};
+  std::array<std::int16_t, 6> temperature{};
+  std::array<float, 6> value{};
+  std::array<std::uint32_t, 6> state{};
+};
+
+struct FaultCodeSample {
+  std::uint64_t sequence{0};
+  std::uint64_t sample_time_ns{0};
+  std::uint8_t level{0};
+  std::uint8_t reserve{0};
+  std::uint32_t code{0};
+};
+
+struct RobotAuxStateSnapshot {
+  std::optional<ImuSample> imu;
+  std::optional<BmsStateSample> bms;
+  std::optional<MainBoardStateSample> mainboard;
+  std::vector<FaultCodeSample> faults;
+
+  [[nodiscard]] bool empty() const noexcept {
+    return !imu.has_value() && !bms.has_value() && !mainboard.has_value() &&
+           faults.empty();
+  }
+};
+
 struct CommandFrame {
   std::uint64_t sequence{0};
   std::uint64_t source_time_ns{0};
@@ -232,6 +317,7 @@ struct AdapterHealth {
 struct AdapterReadResult {
   AdapterCallResult result;
   std::optional<StateFrame> state;
+  RobotAuxStateSnapshot aux_state;
 };
 
 struct AdapterHealthResult {

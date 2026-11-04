@@ -1,0 +1,42 @@
+---------
+arm_control_sdk
+---------
+
+
+commit 163195497614741391d29c954b50633683c87e40
+Author: huangyujun <huangyujun@cvte.com>
+Date:   Thu Aug 20 17:32:55 2026 +0800
+
+    [feature]添加deb注入工具
+
+commit 1d157cd058ea8e1bd91712c8c2c81625ccbde92e
+Merge: 0cf48d0 c8aa324
+Author: 黄宇钧 <huangyujun@cvte.com>
+Date:   Tue Aug 18 16:08:17 2026 +0800
+
+    Merge branch 'passthrough.fix' into 'main.dev'
+    
+    [feature]屏蔽D3双臂CAN透传接口，改用EtherCAT透传并更新文档，移除builtin_fun多余ament依赖
+    
+    See merge request cvte_arm/carm_group/arm_control_sdk!39
+
+commit c8aa3245c9b26870ac03bb9045b555fd99e8ac12
+Author: shuaiwang <wangshuai10799@cvte.com>
+Date:   Tue Aug 18 16:03:55 2026 +0800
+
+    [feature]屏蔽D3双臂CAN透传接口，改用EtherCAT透传并更新文档，移除builtin_fun多余ament依赖
+
+commit 0cf48d0e575c6efeb9502237e98b7b8dc7934831
+Author: huangyujun <huangyujun@cvte.com>
+Date:   Tue Aug 18 15:35:51 2026 +0800
+
+    [feature]添加上半身相关测试和sdk
+
+commit d0c3a41030fc3005a40fd576a18e779f76fa6a62
+Author: huangyujun <huangyujun@cvte.com>
+Date:   Mon Aug 17 10:28:44 2026 +0800
+
+    [feature]更改标零点问题,修复py警告退出阻塞问题
+
+
+

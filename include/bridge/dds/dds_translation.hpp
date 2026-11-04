@@ -5,6 +5,9 @@
 
 #include "unitree/idl/hg/LowCmd_.hpp"
 #include "unitree/idl/hg/LowState_.hpp"
+#include "unitree/idl/hg/BmsState_.hpp"
+#include "unitree/idl/hg/IMUState_.hpp"
+#include "unitree/idl/hg/MainBoardState_.hpp"
 
 #include "../config/joint_map.hpp"
 #include "../core/types.hpp"
@@ -37,6 +40,21 @@ struct StateTranslation {
   std::optional<unitree_hg::msg::dds_::LowState_> state;
 };
 
+struct ImuStateTranslation {
+  TranslationResult result;
+  std::optional<unitree_hg::msg::dds_::IMUState_> state;
+};
+
+struct BmsStateTranslation {
+  TranslationResult result;
+  std::optional<unitree_hg::msg::dds_::BmsState_> state;
+};
+
+struct MainBoardStateTranslation {
+  TranslationResult result;
+  std::optional<unitree_hg::msg::dds_::MainBoardState_> state;
+};
+
 [[nodiscard]] CommandTranslation translate_lowcmd_to_command(
     const unitree_hg::msg::dds_::LowCmd_& message,
     std::uint64_t receive_time_ns);
@@ -52,5 +70,14 @@ struct StateTranslation {
 [[nodiscard]] StateTranslation translate_hardware_state_to_lowstate(
     const core::StateFrame& hardware_state,
     const config::JointMap& joint_map);
+
+[[nodiscard]] ImuStateTranslation translate_state_to_imu_state(
+    const core::StateFrame& state);
+
+[[nodiscard]] BmsStateTranslation translate_bms_sample_to_bms_state(
+    const core::BmsStateSample& state);
+
+[[nodiscard]] MainBoardStateTranslation translate_mainboard_sample_to_mainboard_state(
+    const core::MainBoardStateSample& state);
 
 }

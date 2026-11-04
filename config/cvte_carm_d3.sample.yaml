@@ -1,0 +1,34 @@
+# CVTE CArm D3 integrated dual-arm sample. Replace IP and joint names if needed.
+robot_kind: cvte_carm_d3
+robot_name: cvte_carm_d3
+api_rate_hz: 100
+transport: tcp
+interface_hint: 10.42.0.101
+dds:
+  command_topic: unused/cvte_carm_d3/command
+  state_topic: unused/cvte_carm_d3/state
+assembly:
+  profile: cvte_carm_d3
+  adapter:
+    type: cvte_carm_d3
+  command_ingress:
+    enabled: false
+    type: none
+  state_egress:
+    enabled: false
+    type: none
+joints:
+  - {index: 0, name: left_joint_0, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 1, name: left_joint_1, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 2, name: left_joint_2, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 3, name: left_joint_3, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 4, name: left_joint_4, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 5, name: left_joint_5, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 6, name: left_joint_6, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 7, name: right_joint_0, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 8, name: right_joint_1, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 9, name: right_joint_2, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 10, name: right_joint_3, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 11, name: right_joint_4, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 12, name: right_joint_5, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 13, name: right_joint_6, enable: true, sign: 1.0, offset: 0.0}

@@ -45,6 +45,10 @@ enum class DdsTopicSelection {
   kNone,
   kCommand,
   kState,
+  kImuState,
+  kBmsState,
+  kMainboardState,
+  kFaultCode,
   kStatus,
 };
 
@@ -92,6 +96,10 @@ struct RawBridgeConfig {
   std::optional<int> dds_domain_id;
   std::optional<std::string> dds_command_topic;
   std::optional<std::string> dds_state_topic;
+  std::optional<std::string> dds_imu_state_topic;
+  std::optional<std::string> dds_bms_state_topic;
+  std::optional<std::string> dds_mainboard_state_topic;
+  std::optional<std::string> dds_fault_code_topic;
   std::optional<std::string> dds_status_topic;
   std::optional<bool> debug_print_state;
   std::optional<bool> debug_print_command;
@@ -121,6 +129,8 @@ struct RawBridgeConfig {
   std::optional<std::string> adapter_command_topic;
   std::optional<std::string> adapter_state_topic;
   std::optional<std::string> adapter_imu_topic;
+  std::optional<std::string> adapter_bms_state_topic;
+  std::optional<std::string> adapter_mainboard_state_topic;
   JointMapValidationOptions joint_map_validation;
   std::vector<JointMapEntry> joint_map_entries;
 };
@@ -615,6 +625,14 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           raw->dds_command_topic = key_value->second;
         } else if (key_value->first == "state_topic" && !key_value->second.empty()) {
           raw->dds_state_topic = key_value->second;
+        } else if (key_value->first == "imu_state" && !key_value->second.empty()) {
+          raw->dds_imu_state_topic = key_value->second;
+        } else if (key_value->first == "bms_state" && !key_value->second.empty()) {
+          raw->dds_bms_state_topic = key_value->second;
+        } else if (key_value->first == "mainboard_state" && !key_value->second.empty()) {
+          raw->dds_mainboard_state_topic = key_value->second;
+        } else if (key_value->first == "fault_code" && !key_value->second.empty()) {
+          raw->dds_fault_code_topic = key_value->second;
         } else if (key_value->first == "command" && !key_value->second.empty()) {
           raw->dds_command_topic = key_value->second;
         } else if (key_value->first == "state" && !key_value->second.empty()) {
@@ -637,6 +655,14 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
           dds_topic_selection = DdsTopicSelection::kCommand;
         } else if (key_value->first == "state") {
           dds_topic_selection = DdsTopicSelection::kState;
+        } else if (key_value->first == "imu_state") {
+          dds_topic_selection = DdsTopicSelection::kImuState;
+        } else if (key_value->first == "bms_state") {
+          dds_topic_selection = DdsTopicSelection::kBmsState;
+        } else if (key_value->first == "mainboard_state") {
+          dds_topic_selection = DdsTopicSelection::kMainboardState;
+        } else if (key_value->first == "fault_code") {
+          dds_topic_selection = DdsTopicSelection::kFaultCode;
         } else if (key_value->first == "status") {
           dds_topic_selection = DdsTopicSelection::kStatus;
         }
@@ -656,6 +682,14 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
             raw->dds_command_topic = key_value->second;
           } else if (dds_topic_selection == DdsTopicSelection::kState) {
             raw->dds_state_topic = key_value->second;
+          } else if (dds_topic_selection == DdsTopicSelection::kImuState) {
+            raw->dds_imu_state_topic = key_value->second;
+          } else if (dds_topic_selection == DdsTopicSelection::kBmsState) {
+            raw->dds_bms_state_topic = key_value->second;
+          } else if (dds_topic_selection == DdsTopicSelection::kMainboardState) {
+            raw->dds_mainboard_state_topic = key_value->second;
+          } else if (dds_topic_selection == DdsTopicSelection::kFaultCode) {
+            raw->dds_fault_code_topic = key_value->second;
           } else if (dds_topic_selection == DdsTopicSelection::kStatus) {
             raw->dds_status_topic = key_value->second;
           }
@@ -951,6 +985,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
             raw->adapter_state_topic = key_value->second;
           } else if (key_value->first == "imu") {
             raw->adapter_imu_topic = key_value->second;
+          } else if (key_value->first == "bms_state") {
+            raw->adapter_bms_state_topic = key_value->second;
+          } else if (key_value->first == "mainboard_state") {
+            raw->adapter_mainboard_state_topic = key_value->second;
           }
         }
       }
@@ -1633,6 +1671,10 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.dds.domain_id = static_cast<std::uint32_t>(dds_domain_id);
   config.dds.topics.command = *raw.dds_command_topic;
   config.dds.topics.state = *raw.dds_state_topic;
+  config.dds.topics.imu_state = raw.dds_imu_state_topic.value_or("");
+  config.dds.topics.bms_state = raw.dds_bms_state_topic.value_or("");
+  config.dds.topics.mainboard_state = raw.dds_mainboard_state_topic.value_or("");
+  config.dds.topics.fault_code = raw.dds_fault_code_topic.value_or("");
   config.dds.topics.status = dds_status_topic;
   config.debug_print.state = debug_print_state;
   config.debug_print.command = debug_print_command;
@@ -1673,6 +1715,9 @@ void assign_limit_field(JointFieldLimits* limits, const std::string& key,
   config.adapter.topics.command = raw.adapter_command_topic.value_or("");
   config.adapter.topics.state = raw.adapter_state_topic.value_or("");
   config.adapter.topics.imu = raw.adapter_imu_topic.value_or("");
+  config.adapter.topics.bms_state = raw.adapter_bms_state_topic.value_or("");
+  config.adapter.topics.mainboard_state =
+      raw.adapter_mainboard_state_topic.value_or("");
   config.adapter.joint_names = std::move(joint_names);
 
   config.joint_map_validation = joint_map_validation;

@@ -126,7 +126,8 @@ class BridgeStateEgress {
 
   virtual RunnerCallResult start() = 0;
 
-  virtual RunnerCallResult publish(StateFrame& state) = 0;
+  virtual RunnerCallResult publish(StateFrame& state,
+                                   const RobotAuxStateSnapshot& aux_state) = 0;
 
   virtual RunnerCallResult stop() = 0;
 };

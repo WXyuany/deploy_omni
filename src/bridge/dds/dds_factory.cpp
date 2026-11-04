@@ -10,6 +10,10 @@ DdsAssembly create_dds_assembly(const config::BridgeStartupConfig& startup_confi
       .domain_id = startup_config.dds.domain_id,
       .command_topic = startup_config.dds.topics.command,
       .state_topic = startup_config.dds.topics.state,
+      .imu_state_topic = startup_config.dds.topics.imu_state,
+      .bms_state_topic = startup_config.dds.topics.bms_state,
+      .mainboard_state_topic = startup_config.dds.topics.mainboard_state,
+      .fault_code_topic = startup_config.dds.topics.fault_code,
       .status_topic = startup_config.dds.topics.status,
       .network_interface = startup_config.adapter.connection.interface_hint,
   });

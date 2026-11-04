@@ -1,0 +1,26 @@
+# CVTE CArm A3 single-arm sample. Replace interface_hint with the controller IP.
+robot_kind: cvte_carm_a3
+robot_name: cvte_carm_a3
+api_rate_hz: 100
+transport: tcp
+interface_hint: 10.42.0.101
+dds:
+  command_topic: unused/cvte_carm_a3/command
+  state_topic: unused/cvte_carm_a3/state
+assembly:
+  profile: cvte_carm_a3
+  adapter:
+    type: cvte_carm_a3
+  command_ingress:
+    enabled: false
+    type: none
+  state_egress:
+    enabled: false
+    type: none
+joints:
+  - {index: 0, name: joint_0, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 1, name: joint_1, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 2, name: joint_2, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 3, name: joint_3, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 4, name: joint_4, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 5, name: joint_5, enable: true, sign: 1.0, offset: 0.0}

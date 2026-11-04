@@ -111,9 +111,6 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
 [[nodiscard]] std::size_t configured_sim_width(const config::JointMap& joint_map) {
   std::size_t width = 0;
   for (const auto& entry : joint_map.entries()) {
-    if (!entry.enabled) {
-      continue;
-    }
     width = std::max(width, entry.sim_index + 1);
   }
   return width;
@@ -206,6 +203,30 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
   return make_result(TranslationStatus::kOk, "state validated");
 }
 
+[[nodiscard]] unitree_hg::msg::dds_::IMUState_ make_imu_state_message(
+    const core::StateFrame& state) {
+  unitree_hg::msg::dds_::IMUState_ imu_state;
+  if (state.imu.has_value()) {
+    std::array<float, 4> quaternion{1.0F, 0.0F, 0.0F, 0.0F};
+    std::array<float, 3> rpy{0.0F, 0.0F, 0.0F};
+    std::array<float, 3> gyroscope{0.0F, 0.0F, 0.0F};
+    std::array<float, 3> accelerometer{0.0F, 0.0F, 0.0F};
+    quaternion[0] = static_cast<float>(state.imu->orientation_xyzw[3]);
+    quaternion[1] = static_cast<float>(state.imu->orientation_xyzw[0]);
+    quaternion[2] = static_cast<float>(state.imu->orientation_xyzw[1]);
+    quaternion[3] = static_cast<float>(state.imu->orientation_xyzw[2]);
+    std::copy_n(state.imu->rpy_xyz.begin(), 3, rpy.begin());
+    std::copy_n(state.imu->angular_velocity_xyz.begin(), 3, gyroscope.begin());
+    std::copy_n(state.imu->linear_acceleration_xyz.begin(), 3, accelerometer.begin());
+    imu_state.quaternion(quaternion);
+    imu_state.rpy(rpy);
+    imu_state.gyroscope(gyroscope);
+    imu_state.accelerometer(accelerometer);
+    imu_state.temperature(state.imu->temperature);
+  }
+  return imu_state;
+}
+
 [[nodiscard]] unitree_hg::msg::dds_::LowState_ make_low_state_message(
     const core::StateFrame& state) {
   unitree_hg::msg::dds_::LowState_ message;
@@ -253,28 +274,38 @@ constexpr std::size_t kUnitreeMotorSlotCount = 35U;
   message.motor_state(motors);
   message.wireless_remote(state.wireless_remote);
 
-  unitree_hg::msg::dds_::IMUState_ imu_state;
-  if (state.imu.has_value()) {
-    std::array<float, 4> quaternion{1.0F, 0.0F, 0.0F, 0.0F};
-    std::array<float, 3> rpy{0.0F, 0.0F, 0.0F};
-    std::array<float, 3> gyroscope{0.0F, 0.0F, 0.0F};
-    std::array<float, 3> accelerometer{0.0F, 0.0F, 0.0F};
-    quaternion[0] = static_cast<float>(state.imu->orientation_xyzw[3]);
-    quaternion[1] = static_cast<float>(state.imu->orientation_xyzw[0]);
-    quaternion[2] = static_cast<float>(state.imu->orientation_xyzw[1]);
-    quaternion[3] = static_cast<float>(state.imu->orientation_xyzw[2]);
-    std::copy_n(state.imu->rpy_xyz.begin(), 3, rpy.begin());
-    std::copy_n(state.imu->angular_velocity_xyz.begin(), 3, gyroscope.begin());
-    std::copy_n(state.imu->linear_acceleration_xyz.begin(), 3, accelerometer.begin());
-    imu_state.quaternion(quaternion);
-    imu_state.rpy(rpy);
-    imu_state.gyroscope(gyroscope);
-    imu_state.accelerometer(accelerometer);
-    imu_state.temperature(state.imu->temperature);
-  }
-  message.imu_state(imu_state);
+  message.imu_state(make_imu_state_message(state));
   message.crc(crc32_core(reinterpret_cast<uint32_t*>(&message),
                          (sizeof(message) >> 2) - 1));
+  return message;
+}
+
+[[nodiscard]] unitree_hg::msg::dds_::BmsState_ make_bms_state_message(
+    const core::BmsStateSample& state) {
+  unitree_hg::msg::dds_::BmsState_ message;
+  message.version_high(state.version_high);
+  message.version_low(state.version_low);
+  message.fn(state.fn);
+  message.cell_vol(state.cell_voltage);
+  message.bmsvoltage(state.bms_voltage);
+  message.current(state.current);
+  message.soc(state.soc);
+  message.soh(state.soh);
+  message.temperature(state.temperature);
+  message.cycle(state.cycle);
+  message.manufacturer_date(state.manufacturer_date);
+  message.bmsstate(state.bms_state);
+  message.reserve(state.reserve);
+  return message;
+}
+
+[[nodiscard]] unitree_hg::msg::dds_::MainBoardState_ make_mainboard_state_message(
+    const core::MainBoardStateSample& state) {
+  unitree_hg::msg::dds_::MainBoardState_ message;
+  message.fan_state(state.fan_state);
+  message.temperature(state.temperature);
+  message.value(state.value);
+  message.state(state.state);
   return message;
 }
 
@@ -393,6 +424,28 @@ StateTranslation translate_hardware_state_to_lowstate(
             .state = std::nullopt};
   }
   return translate_state_to_lowstate(*projected.state);
+}
+
+ImuStateTranslation translate_state_to_imu_state(const core::StateFrame& state) {
+  const TranslationResult validation = validate_state(state);
+  if (!validation.succeeded()) {
+    return {.result = validation, .state = std::nullopt};
+  }
+  return {.result = make_result(TranslationStatus::kOk, "translated state to imu_state"),
+          .state = make_imu_state_message(state)};
+}
+
+BmsStateTranslation translate_bms_sample_to_bms_state(
+    const core::BmsStateSample& state) {
+  return {.result = make_result(TranslationStatus::kOk, "translated state to bms_state"),
+          .state = make_bms_state_message(state)};
+}
+
+MainBoardStateTranslation translate_mainboard_sample_to_mainboard_state(
+    const core::MainBoardStateSample& state) {
+  return {.result = make_result(TranslationStatus::kOk,
+                                "translated state to mainboard_state"),
+          .state = make_mainboard_state_message(state)};
 }
 
 }  // namespace bridge::dds

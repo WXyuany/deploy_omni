@@ -24,6 +24,9 @@ using bridge::core::StateFrame;
 using bridge::dds::translate_hardware_state_to_lowstate;
 using bridge::dds::translate_lowcmd_to_command;
 using bridge::dds::translate_lowcmd_to_hardware_command;
+using bridge::dds::translate_bms_sample_to_bms_state;
+using bridge::dds::translate_state_to_imu_state;
+using bridge::dds::translate_mainboard_sample_to_mainboard_state;
 using unitree_hg::msg::dds_::LowCmd_;
 
 JointMap MakeSwappingJointMap() {
@@ -337,22 +340,24 @@ void TestDisabledJointSlotsRemainZeroInDdsTranslations() {
       message, 400U, MakeJointMapWithDisabledHighestSlot());
   assert(command.result.succeeded());
   assert(command.command.has_value());
-  assert(command.command->joints.position.size() == 2U);
+  assert(command.command->joints.position.size() == 3U);
   assert(command.command->joints.position[0] == 1.0);
   assert(command.command->joints.position[1] == 9.0);
+  assert(command.command->joints.position[2] == 0.0);
 
   auto state = MakeHardwareState();
-  state.joints.position = {11.0, 999.0};
-  state.joints.velocity = {44.0, 999.0};
-  state.joints.effort = {77.0, 999.0};
-  state.joints.acceleration = {12.0, 999.0};
-  state.joints.motor_mode = {7U, 8U};
-  state.joints.motor_temperature = {{{31, 41}}, {{32, 42}}};
-  state.joints.motor_voltage = {51.0, 52.0};
-  state.joints.motor_sensor = {{{61U, 71U}}, {{62U, 72U}}};
-  state.joints.motor_state = {81U, 82U};
+  state.joints.position = {11.0, 999.0, 123.0};
+  state.joints.velocity = {44.0, 999.0, 123.0};
+  state.joints.effort = {77.0, 999.0, 123.0};
+  state.joints.acceleration = {12.0, 999.0, 123.0};
+  state.joints.motor_mode = {7U, 8U, 9U};
+  state.joints.motor_temperature = {{{31, 41}}, {{32, 42}}, {{33, 43}}};
+  state.joints.motor_voltage = {51.0, 52.0, 53.0};
+  state.joints.motor_sensor = {{{61U, 71U}}, {{62U, 72U}}, {{63U, 73U}}};
+  state.joints.motor_state = {81U, 82U, 83U};
   state.joints.motor_reserve = {{{91U, 101U, 111U, 121U}},
-                                {{92U, 102U, 112U, 122U}}};
+                                {{92U, 102U, 112U, 122U}},
+                                {{93U, 103U, 113U, 123U}}};
 
   const auto lowstate =
       translate_hardware_state_to_lowstate(state, MakeJointMapWithDisabledHighestSlot());
@@ -370,6 +375,57 @@ void TestDisabledJointSlotsRemainZeroInDdsTranslations() {
   assert(lowstate.state->motor_state()[2].reserve()[3] == 0U);
 }
 
+void TestTranslatesStateToStandaloneImuState() {
+  const auto translated = translate_state_to_imu_state(MakeHardwareState());
+
+  assert(translated.result.succeeded());
+  assert(translated.state.has_value());
+  assert(translated.state->quaternion()[0] == 0.5F);
+  assert(translated.state->quaternion()[1] == 0.2F);
+  assert(translated.state->gyroscope()[2] == 0.3F);
+  assert(translated.state->accelerometer()[0] == 9.1F);
+  assert(translated.state->rpy()[1] == 0.7F);
+  assert(translated.state->temperature() == 55);
+}
+
+void TestTranslatesOptionalBmsAndMainboardStates() {
+  bridge::core::BmsStateSample bms;
+  bms.version_high = 1U;
+  bms.version_low = 2U;
+  bms.cell_voltage[0] = 3300U;
+  bms.bms_voltage[1] = 48000U;
+  bms.current = -123;
+  bms.soc = 88U;
+  bms.temperature[2] = 35;
+  bms.bms_state[3] = 44U;
+
+  bridge::core::MainBoardStateSample mainboard;
+  mainboard.fan_state[0] = 9U;
+  mainboard.temperature[1] = 42;
+  mainboard.value[2] = 3.5F;
+  mainboard.state[3] = 4U;
+
+  const auto translated_bms = translate_bms_sample_to_bms_state(bms);
+  assert(translated_bms.result.succeeded());
+  assert(translated_bms.state.has_value());
+  assert(translated_bms.state->version_high() == 1U);
+  assert(translated_bms.state->cell_vol()[0] == 3300U);
+  assert(translated_bms.state->bmsvoltage()[1] == 48000U);
+  assert(translated_bms.state->current() == -123);
+  assert(translated_bms.state->soc() == 88U);
+  assert(translated_bms.state->temperature()[2] == 35);
+  assert(translated_bms.state->bmsstate()[3] == 44U);
+
+  const auto translated_mainboard =
+      translate_mainboard_sample_to_mainboard_state(mainboard);
+  assert(translated_mainboard.result.succeeded());
+  assert(translated_mainboard.state.has_value());
+  assert(translated_mainboard.state->fan_state()[0] == 9U);
+  assert(translated_mainboard.state->temperature()[1] == 42);
+  assert(translated_mainboard.state->value()[2] == 3.5F);
+  assert(translated_mainboard.state->state()[3] == 4U);
+}
+
 }  // namespace
 
 int main() {
@@ -382,5 +438,7 @@ int main() {
   TestRejectsStateWithMismatchedDiagnosticVectorWidths();
   TestDiagnosticOnlyStateDefaultsMissingMotionFieldsToZero();
   TestDisabledJointSlotsRemainZeroInDdsTranslations();
+  TestTranslatesStateToStandaloneImuState();
+  TestTranslatesOptionalBmsAndMainboardStates();
   return 0;
 }

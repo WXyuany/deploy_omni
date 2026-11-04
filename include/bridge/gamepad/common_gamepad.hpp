@@ -70,4 +70,8 @@ struct CommonGamepad {
 [[nodiscard]] std::array<std::uint8_t, 40> compress_to_wireless_remote(
     const CommonGamepad& gamepad) noexcept;
 
+[[nodiscard]] bool decompress_from_wireless_remote(
+    const std::array<std::uint8_t, 40>& payload,
+    CommonGamepad* gamepad) noexcept;
+
 }  // namespace bridge::gamepad

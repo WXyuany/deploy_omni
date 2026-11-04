@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "../../core/robot_sdk_adapter.hpp"
+#include "unitree_g1_sdk.hpp"
+#include "unitree_g1_sensor_session.hpp"
 
 namespace bridge::adapters::unitree_g1 {
 
@@ -65,7 +67,24 @@ class UnitreeG1Adapter final : public bridge::core::RobotSdkAdapter {
     return kUnitreeG1AdapterName;
   }
 
+  [[nodiscard]] bridge::core::RobotCapabilitySet capabilities() const noexcept override {
+    using bridge::core::RobotCapability;
+    return RobotCapability::kJointState |
+           RobotCapability::kJointPositionCommand |
+           RobotCapability::kJointTorqueCommand |
+           RobotCapability::kImu |
+           RobotCapability::kCamera |
+           RobotCapability::kPointCloud |
+           RobotCapability::kNavigation |
+           RobotCapability::kAudio |
+           RobotCapability::kLighting;
+  }
+
   [[nodiscard]] const UnitreeG1AdapterConfig& config() const noexcept;
+  [[nodiscard]] UnitreeG1SdkFacade& sdk() noexcept;
+  [[nodiscard]] const UnitreeG1SdkFacade& sdk() const noexcept;
+  [[nodiscard]] UnitreeG1SensorSession& sensors() noexcept;
+  [[nodiscard]] const UnitreeG1SensorSession& sensors() const noexcept;
 
   void set_runtime_event_sink(bridge::core::BridgeRuntimeEventSink* event_sink) override;
   bridge::core::AdapterCallResult initialize() override;

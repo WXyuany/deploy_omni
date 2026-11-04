@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carm"
+version = "0.1.20260819"
+authors = [
+    {name = "Yujun Huang", email = "huangyujun@cvte.com"},
+    {name = "Yong Zhao", email = "zhaoyong11933@cvte.com"}
+    
+]
+description = "Python interface for cvte arm."
+readme = "README.md"
+requires-python = ">=3.6"
+dependencies = ["websocket-client", "zeroconf"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+
+[project.scripts]
+carm_scan = "carm.carm_scan:main"
+
+[tool.setuptools]
+packages = ["carm"]
+
+[tool.setuptools.package-data]
+carm = [
+    "__init__.py",
+    "carm.py",
+    "carm_kernel.py",
+    "carm_scan.py",
+]

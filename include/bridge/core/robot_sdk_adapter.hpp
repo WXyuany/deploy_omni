@@ -14,6 +14,10 @@ class RobotSdkAdapter {
 
   [[nodiscard]] virtual std::string_view name() const noexcept = 0;
 
+  [[nodiscard]] virtual RobotCapabilitySet capabilities() const noexcept {
+    return {};
+  }
+
   virtual AdapterCallResult initialize() = 0;
 
   virtual void set_runtime_event_sink(BridgeRuntimeEventSink* event_sink) {

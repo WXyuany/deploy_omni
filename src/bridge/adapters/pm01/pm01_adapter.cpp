@@ -20,9 +20,11 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "interface_protocol/msg/imu_info.hpp"
+#include "interface_protocol/msg/alert.hpp"
 #include "interface_protocol/msg/joint_command.hpp"
 #include "interface_protocol/msg/joint_state.hpp"
 #include "interface_protocol/msg/motion_state.hpp"
+#include "interface_protocol/msg/power_info.hpp"
 #endif
 
 namespace bridge::adapters::pm01 {
@@ -78,6 +80,69 @@ constexpr std::uint64_t kFallbackTickNs = 1'000'000;
                                         const std::size_t width) noexcept {
   return values.empty() || values.size() == width;
 }
+
+[[nodiscard]] std::uint8_t clamp_percent_to_u8(const float value) noexcept {
+  if (value <= 0.0F) {
+    return 0U;
+  }
+  if (value >= 100.0F) {
+    return 100U;
+  }
+  return static_cast<std::uint8_t>(value);
+}
+
+[[nodiscard]] std::uint32_t voltage_to_millivolts(const float value) noexcept {
+  return value <= 0.0F ? 0U : static_cast<std::uint32_t>(value * 1000.0F);
+}
+
+[[nodiscard]] std::int32_t current_to_milliamps(const float value) noexcept {
+  return static_cast<std::int32_t>(value * 1000.0F);
+}
+
+#if BRIDGE_PM01_REAL_BACKEND_AVAILABLE
+[[nodiscard]] bridge::core::ImuSample make_imu_sample_from_ros2(
+    const interface_protocol::msg::ImuInfo& msg,
+    const std::uint64_t sample_time_ns) {
+  bridge::core::ImuSample sample;
+  sample.sample_time_ns = sample_time_ns;
+  sample.valid = true;
+  sample.stale = false;
+  sample.orientation_xyzw = {msg.quaternion.x, msg.quaternion.y, msg.quaternion.z,
+                             msg.quaternion.w};
+  sample.rpy_xyz = {msg.rpy.x, msg.rpy.y, msg.rpy.z};
+  sample.angular_velocity_xyz = {msg.angular_velocity.x, msg.angular_velocity.y,
+                                 msg.angular_velocity.z};
+  sample.linear_acceleration_xyz = {msg.linear_acceleration.x,
+                                    msg.linear_acceleration.y,
+                                    msg.linear_acceleration.z};
+  return sample;
+}
+
+[[nodiscard]] bridge::core::BmsStateSample make_bms_sample_from_ros2(
+    const interface_protocol::msg::PowerInfo& msg) {
+  bridge::core::BmsStateSample sample;
+  sample.soc = clamp_percent_to_u8(msg.percentage);
+  sample.bms_voltage[0] = voltage_to_millivolts(msg.voltage);
+  sample.current = current_to_milliamps(msg.current);
+  if (msg.error_code > 0) {
+    sample.bms_state[0] = static_cast<std::uint32_t>(msg.error_code);
+  }
+  sample.reserve[0] = msg.enable ? 1U : 0U;
+  return sample;
+}
+
+[[nodiscard]] bridge::core::FaultCodeSample make_fault_sample_from_ros2(
+    const interface_protocol::msg::Alert& msg,
+    const std::uint64_t sequence,
+    const std::uint64_t sample_time_ns) {
+  bridge::core::FaultCodeSample sample;
+  sample.sequence = sequence;
+  sample.sample_time_ns = sample_time_ns;
+  sample.code = static_cast<std::uint32_t>(msg.type);
+  sample.level = msg.type == interface_protocol::msg::Alert::ERROR ? 3U : 1U;
+  return sample;
+}
+#endif
 
 [[nodiscard]] bridge::core::BridgeFault make_fault(
     const bridge::core::FaultCategory category,
@@ -324,6 +389,19 @@ class Pm01Adapter::Impl {
           std::lock_guard<std::mutex> lock(ros_mutex_);
           latest_imu_ = msg;
         });
+    power_info_sub_ =
+        ros_node_->create_subscription<interface_protocol::msg::PowerInfo>(
+            "/hardware/power_info", qos,
+            [this](const interface_protocol::msg::PowerInfo::SharedPtr msg) {
+              std::lock_guard<std::mutex> lock(ros_mutex_);
+              latest_power_info_ = msg;
+            });
+    alert_sub_ = ros_node_->create_subscription<interface_protocol::msg::Alert>(
+        "/hardware/alert", qos,
+        [this](const interface_protocol::msg::Alert::SharedPtr msg) {
+          std::lock_guard<std::mutex> lock(ros_mutex_);
+          pending_alerts_.push_back(*msg);
+        });
     motion_state_sub_ = ros_node_->create_subscription<interface_protocol::msg::MotionState>(
         "/motion/motion_state", 1,
         [this](const interface_protocol::msg::MotionState::SharedPtr msg) {
@@ -350,11 +428,15 @@ class Pm01Adapter::Impl {
     bridge::core::AdapterReadResult result;
     interface_protocol::msg::JointState::SharedPtr joint_state;
     interface_protocol::msg::ImuInfo::SharedPtr imu;
+    interface_protocol::msg::PowerInfo::SharedPtr power_info;
+    std::vector<interface_protocol::msg::Alert> alerts;
     {
       std::lock_guard<std::mutex> ros_lock(ros_mutex_);
       joint_state = latest_joint_state_;
       latest_joint_state_.reset();
       imu = latest_imu_;
+      power_info = latest_power_info_;
+      alerts.swap(pending_alerts_);
     }
 
     if (!joint_state) {
@@ -371,14 +453,14 @@ class Pm01Adapter::Impl {
     has_read_state_ = true;
     lifecycle_state_ = bridge::core::LifecycleState::kActive;
 
-     bridge::core::StateFrame state;
-     state.sequence = ++state_sequence_;
-     state.sample_time_ns = synthetic_time_ns_;
-     state.publish_time_ns = synthetic_time_ns_;
-     state.mode_pr = ros_mode_pr_;
-     state.mode_machine = ros_mode_machine_;
-     state.lifecycle_state = lifecycle_state_;
-     state.active_mode = ros_active_mode_;
+    bridge::core::StateFrame state;
+    state.sequence = ++state_sequence_;
+    state.sample_time_ns = synthetic_time_ns_;
+    state.publish_time_ns = synthetic_time_ns_;
+    state.mode_pr = ros_mode_pr_;
+    state.mode_machine = ros_mode_machine_;
+    state.lifecycle_state = lifecycle_state_;
+    state.active_mode = ros_active_mode_;
     state.mode_label = ros_mode_label_;
     state.valid = true;
     state.stale = false;
@@ -389,21 +471,21 @@ class Pm01Adapter::Impl {
     state.joints.acceleration.assign(config_.joint_count(), 0.0);
 
     if (imu) {
-      bridge::core::ImuSample sample;
-      sample.sample_time_ns = synthetic_time_ns_;
-       sample.valid = true;
-       sample.stale = false;
-       sample.orientation_xyzw = {imu->quaternion.x, imu->quaternion.y,
-                                  imu->quaternion.z, imu->quaternion.w};
-       sample.rpy_xyz = {imu->rpy.x, imu->rpy.y, imu->rpy.z};
-       sample.angular_velocity_xyz = {imu->angular_velocity.x, imu->angular_velocity.y,
-                                      imu->angular_velocity.z};
-      sample.linear_acceleration_xyz = {imu->linear_acceleration.x,
-                                        imu->linear_acceleration.y,
-                                        imu->linear_acceleration.z};
+      bridge::core::ImuSample sample =
+          make_imu_sample_from_ros2(*imu, synthetic_time_ns_);
+      result.aux_state.imu = sample;
       state.imu = std::move(sample);
     } else if (const auto default_imu = build_imu_sample_locked(); default_imu.has_value()) {
       state.imu = default_imu;
+    }
+
+    if (power_info) {
+      result.aux_state.bms = make_bms_sample_from_ros2(*power_info);
+    }
+    result.aux_state.faults.reserve(alerts.size());
+    for (const interface_protocol::msg::Alert& alert : alerts) {
+      result.aux_state.faults.push_back(
+          make_fault_sample_from_ros2(alert, ++alert_sequence_, synthetic_time_ns_));
     }
 
     result.state = std::move(state);
@@ -514,9 +596,13 @@ class Pm01Adapter::Impl {
     joint_cmd_pub_.reset();
     joint_state_sub_.reset();
     imu_sub_.reset();
+    power_info_sub_.reset();
+    alert_sub_.reset();
     motion_state_sub_.reset();
     latest_joint_state_.reset();
     latest_imu_.reset();
+    latest_power_info_.reset();
+    pending_alerts_.clear();
     latest_motion_state_.reset();
     ros_executor_.reset();
     ros_node_.reset();
@@ -737,15 +823,20 @@ class Pm01Adapter::Impl {
   mutable std::mutex ros_mutex_;
   rclcpp::Subscription<interface_protocol::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<interface_protocol::msg::ImuInfo>::SharedPtr imu_sub_;
+  rclcpp::Subscription<interface_protocol::msg::PowerInfo>::SharedPtr power_info_sub_;
+  rclcpp::Subscription<interface_protocol::msg::Alert>::SharedPtr alert_sub_;
   rclcpp::Subscription<interface_protocol::msg::MotionState>::SharedPtr motion_state_sub_;
   rclcpp::Publisher<interface_protocol::msg::JointCommand>::SharedPtr joint_cmd_pub_;
   interface_protocol::msg::JointState::SharedPtr latest_joint_state_;
   interface_protocol::msg::ImuInfo::SharedPtr latest_imu_;
+  interface_protocol::msg::PowerInfo::SharedPtr latest_power_info_;
+  std::vector<interface_protocol::msg::Alert> pending_alerts_;
   interface_protocol::msg::MotionState::SharedPtr latest_motion_state_;
   bridge::core::ControlMode ros_active_mode_{bridge::core::ControlMode::kSafeIdle};
   std::string ros_mode_label_{control_mode_label(bridge::core::ControlMode::kSafeIdle)};
   std::uint8_t ros_mode_pr_{0U};
   std::uint8_t ros_mode_machine_{0U};
+  std::uint64_t alert_sequence_{0};
 #endif
 };
 

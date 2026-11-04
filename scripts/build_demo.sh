@@ -35,9 +35,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
 cmake -S "$repo_root" -B "$repo_root/$build_dir" \
-  -DBUILD_ROBOT_KEPLER_K2=OFF \
-  -DBUILD_ROBOT_PM01=OFF \
-  -DBUILD_ROBOT_UNITREE_G1=ON \
+  -DBRIDGE_ROBOT=unitree_g1 \
   -DBUILD_GAMEPAD_SDL=ON
 
 cmake --build "$repo_root/$build_dir" --target \

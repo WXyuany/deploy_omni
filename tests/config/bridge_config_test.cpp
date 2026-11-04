@@ -243,8 +243,11 @@ void TestLoadsPm01SampleBridgeConfig() {
   assert(config.source_path == "../config/pm01.sample.yaml");
   assert(config.robot_type == "pm01");
   assert(config.runner.lowstate_trigger == LowStateTriggerMode::kEvent);
-  assert(config.dds.topics.command == "rt/lowcmd");
-  assert(config.dds.topics.state == "rt/lowstate");
+  assert(config.dds.topics.command == "bridge/rt/lowcmd");
+  assert(config.dds.topics.state == "bridge/rt/lowstate");
+  assert(config.dds.topics.imu_state == "bridge/rt/secondary_imu");
+  assert(config.dds.topics.bms_state == "bridge/rt/lf/bmsstate");
+  assert(config.dds.topics.mainboard_state == "bridge/rt/lf/mainboardstate");
   assert(config.adapter.kind == "pm01");
   assert(config.adapter.robot_name == "pm01");
   assert(config.adapter.robot_model == "pm01");

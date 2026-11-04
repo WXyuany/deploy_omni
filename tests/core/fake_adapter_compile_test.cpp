@@ -22,6 +22,7 @@ using bridge::core::ImuSample;
 using bridge::core::JointStateBlock;
 using bridge::core::LifecycleState;
 using bridge::core::RobotSdkAdapter;
+using bridge::core::RobotCapability;
 using bridge::core::StateFrame;
 
 template <typename Adapter, typename = void>
@@ -139,6 +140,7 @@ BridgeFault MakeFault() {
 int main() {
   FakeRobotSdkAdapter adapter;
   assert(adapter.name() == std::string_view{"fake"});
+  assert(!adapter.capabilities().contains(RobotCapability::kJointState));
 
   const AdapterCallResult init = adapter.initialize();
   assert(init.succeeded());

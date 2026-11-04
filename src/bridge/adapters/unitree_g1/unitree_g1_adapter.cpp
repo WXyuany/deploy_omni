@@ -65,6 +65,11 @@ class UnitreeG1Adapter::Impl {
     return config_;
   }
 
+  [[nodiscard]] UnitreeG1SdkFacade& sdk() noexcept { return sdk_; }
+  [[nodiscard]] const UnitreeG1SdkFacade& sdk() const noexcept { return sdk_; }
+  [[nodiscard]] UnitreeG1SensorSession& sensors() noexcept { return sensors_; }
+  [[nodiscard]] const UnitreeG1SensorSession& sensors() const noexcept { return sensors_; }
+
   void set_runtime_event_sink(bridge::core::BridgeRuntimeEventSink* event_sink) {
     session_.set_state_available_callback(event_sink == nullptr
                                               ? std::function<void()>{}
@@ -89,6 +94,27 @@ class UnitreeG1Adapter::Impl {
     if (!init.succeeded()) {
       lifecycle_state_.store(bridge::core::LifecycleState::kFaulted);
       return init;
+    }
+
+    if (config_.session.transport_mode != "mock") {
+      if (!sensors_.initialize()) {
+        static_cast<void>(session_.shutdown());
+        lifecycle_state_.store(bridge::core::LifecycleState::kFaulted);
+        return {.status = bridge::core::AdapterCallStatus::kRetryableError,
+                .detail = "unitree_g1 sensor session initialization failed",
+                .fault = std::nullopt};
+      }
+      const auto sdk_init = sdk_.initialize();
+      if (!sdk_init.succeeded()) {
+        sensors_.shutdown();
+        static_cast<void>(session_.shutdown());
+        lifecycle_state_.store(bridge::core::LifecycleState::kFaulted);
+        return {
+            .status = bridge::core::AdapterCallStatus::kRetryableError,
+            .detail = "unitree_g1 SDK facade initialization failed: " + sdk_init.detail,
+            .fault = std::nullopt,
+        };
+      }
     }
 
     initialized_.store(true);
@@ -257,10 +283,21 @@ class UnitreeG1Adapter::Impl {
     }
     lifecycle_state_.store(bridge::core::LifecycleState::kStopping);
     const auto shutdown = session_.shutdown();
+    sensors_.shutdown();
+    const auto sdk_shutdown = sdk_.shutdown();
     initialized_.store(false);
     has_read_state_.store(false);
     lifecycle_state_.store(bridge::core::LifecycleState::kStopped);
-    return shutdown;
+    if (!shutdown.succeeded()) {
+      return shutdown;
+    }
+    return {
+        .status = sdk_shutdown.succeeded()
+                      ? bridge::core::AdapterCallStatus::kOk
+                      : bridge::core::AdapterCallStatus::kRetryableError,
+        .detail = sdk_shutdown.detail,
+        .fault = std::nullopt,
+    };
   }
 
  private:
@@ -306,6 +343,8 @@ class UnitreeG1Adapter::Impl {
 
   UnitreeG1AdapterConfig config_;
   UnitreeG1LowLevelSession session_;
+  UnitreeG1SdkFacade sdk_;
+  UnitreeG1SensorSession sensors_;
   mutable std::mutex lifecycle_mutex_;
   mutable std::mutex command_state_mutex_;
   std::atomic<bool> initialized_{false};
@@ -325,6 +364,18 @@ UnitreeG1Adapter& UnitreeG1Adapter::operator=(UnitreeG1Adapter&&) noexcept = def
 
 const UnitreeG1AdapterConfig& UnitreeG1Adapter::config() const noexcept {
   return impl_->config();
+}
+
+UnitreeG1SdkFacade& UnitreeG1Adapter::sdk() noexcept { return impl_->sdk(); }
+
+const UnitreeG1SdkFacade& UnitreeG1Adapter::sdk() const noexcept {
+  return impl_->sdk();
+}
+
+UnitreeG1SensorSession& UnitreeG1Adapter::sensors() noexcept { return impl_->sensors(); }
+
+const UnitreeG1SensorSession& UnitreeG1Adapter::sensors() const noexcept {
+  return impl_->sensors();
 }
 
 void UnitreeG1Adapter::set_runtime_event_sink(

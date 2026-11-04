@@ -299,9 +299,10 @@ class BridgeRunner::Impl {
     }
 
     StateFrame state = std::move(*read_result.state);
+    RobotAuxStateSnapshot aux_state = std::move(read_result.aux_state);
     update_status_from_state(state, read_result.result);
 
-    RunnerCallResult publish_result = publish_state(state);
+    RunnerCallResult publish_result = publish_state(state, aux_state);
     if (is_error_status(publish_result.status)) {
       return publish_result;
     }
@@ -630,7 +631,8 @@ class BridgeRunner::Impl {
     }
   }
 
-  [[nodiscard]] RunnerCallResult publish_state(StateFrame& state) {
+  [[nodiscard]] RunnerCallResult publish_state(
+      StateFrame& state, const RobotAuxStateSnapshot& aux_state) {
     extensions::HookInvocationContext context;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -653,7 +655,8 @@ class BridgeRunner::Impl {
     }
 
     state.publish_start_time_ns = now_ns();
-    RunnerCallResult publish_result = dependencies_.state_egress->publish(state);
+    RunnerCallResult publish_result =
+        dependencies_.state_egress->publish(state, aux_state);
     const std::uint64_t publish_end_ns = now_ns();
     state.publish_complete_time_ns = publish_end_ns;
     std::optional<observability::ForwardingStatsSnapshot> state_forward_stats;

@@ -4,7 +4,6 @@
 #include <iostream>
 #include <string_view>
 
-#include "../docs/common_gamepad_wireless_codec.h"
 #include "../include/bridge/gamepad/common_gamepad.hpp"
 
 namespace {
@@ -97,8 +96,7 @@ int main() {
       bridge::gamepad::compress_to_wireless_remote(source);
 
   bridge::gamepad::CommonGamepad decoded;
-  const bool ok = common_gamepad_wireless::unpackWirelessRemoteToCommonGamepad(
-      encoded.data(), decoded);
+  const bool ok = bridge::gamepad::decompress_from_wireless_remote(encoded, &decoded);
 
   print_gamepad("source CommonGamepad before encode", source);
   print_encoded_payload(encoded);

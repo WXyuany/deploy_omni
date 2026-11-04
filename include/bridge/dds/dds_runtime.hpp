@@ -10,6 +10,10 @@ struct DdsRuntimeConfig {
   std::uint32_t domain_id{0};
   std::string command_topic{"bridge/command"};
   std::string state_topic{"bridge/state"};
+  std::string imu_state_topic;
+  std::string bms_state_topic;
+  std::string mainboard_state_topic;
+  std::string fault_code_topic;
   std::string status_topic{"bridge/status"};
   std::string network_interface;
 };

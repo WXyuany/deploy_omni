@@ -14,9 +14,15 @@ dds:
   domain_id: 0
   topics:
     command:
-      name: rt/lowcmd
+      name: bridge/rt/lowcmd
     state:
-      name: rt/lowstate
+      name: bridge/rt/lowstate
+    imu_state:
+      name: bridge/rt/secondary_imu
+    bms_state:
+      name: bridge/rt/lf/bmsstate
+    mainboard_state:
+      name: bridge/rt/lf/mainboardstate
 
 debug_print:
   state: false

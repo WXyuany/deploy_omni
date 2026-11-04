@@ -1,0 +1,51 @@
+# Agibot X2 (灵犀 X2) ROS2 HAL sample. Replace interface_hint with the ROS2 network interface.
+robot_kind: agibot_x2
+robot_name: agibot_x2
+api_rate_hz: 500
+transport: ros2
+interface_hint: eth0
+dds:
+  command_topic: unused/agibot_x2/command
+  state_topic: unused/agibot_x2/state
+assembly:
+  profile: agibot_x2
+  adapter:
+    type: agibot_x2
+  command_ingress:
+    enabled: false
+    type: none
+  state_egress:
+    enabled: false
+    type: none
+joints:
+  - {index: 0, name: head_yaw_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 1, name: head_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 2, name: waist_yaw_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 3, name: waist_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 4, name: waist_roll_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 5, name: left_shoulder_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 6, name: left_shoulder_roll_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 7, name: left_shoulder_yaw_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 8, name: left_elbow_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 9, name: left_wrist_yaw_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 10, name: left_wrist_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 11, name: left_wrist_roll_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 12, name: right_shoulder_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 13, name: right_shoulder_roll_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 14, name: right_shoulder_yaw_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 15, name: right_elbow_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 16, name: right_wrist_yaw_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 17, name: right_wrist_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 18, name: right_wrist_roll_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 19, name: left_hip_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 20, name: left_hip_roll_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 21, name: left_hip_yaw_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 22, name: left_knee_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 23, name: left_ankle_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 24, name: left_ankle_roll_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 25, name: right_hip_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 26, name: right_hip_roll_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 27, name: right_hip_yaw_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 28, name: right_knee_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 29, name: right_ankle_pitch_joint, enable: true, sign: 1.0, offset: 0.0}
+  - {index: 30, name: right_ankle_roll_joint, enable: true, sign: 1.0, offset: 0.0}

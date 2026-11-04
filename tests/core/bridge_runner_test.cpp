@@ -37,6 +37,7 @@ using bridge::core::ControlMode;
 using bridge::core::FaultCategory;
 using bridge::core::HealthState;
 using bridge::core::LifecycleState;
+using bridge::core::RobotAuxStateSnapshot;
 using bridge::core::RobotSdkAdapter;
 using bridge::core::RunnerCallResult;
 using bridge::core::RunnerCallStatus;
@@ -235,7 +236,9 @@ class FakeStateEgress final : public BridgeStateEgress {
             .fault = std::nullopt};
   }
 
-  RunnerCallResult publish(StateFrame& state) override {
+  RunnerCallResult publish(StateFrame& state,
+                           const RobotAuxStateSnapshot& aux_state) override {
+    (void)aux_state;
     assert(started_);
     state.lowstate_translate_duration_ns = 11'000U;
     state.dds_write_duration_ns = 22'000U;

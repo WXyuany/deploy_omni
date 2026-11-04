@@ -51,6 +51,8 @@ struct AdapterTopicConfig {
   std::string command;
   std::string state;
   std::string imu;
+  std::string bms_state;
+  std::string mainboard_state;
 };
 
 struct RobotAdapterConfig {
@@ -72,6 +74,10 @@ struct RobotAdapterConfig {
 struct DdsTopicNames {
   std::string command;
   std::string state;
+  std::string imu_state;
+  std::string bms_state;
+  std::string mainboard_state;
+  std::string fault_code;
   std::string status;
 };
 
@@ -80,6 +86,10 @@ struct DdsConfig {
   DdsTopicNames topics{
       .command = "rt/lowcmd",
       .state = "rt/lowstate",
+      .imu_state = "",
+      .bms_state = "",
+      .mainboard_state = "",
+      .fault_code = "",
       .status = "",
   };
 };
