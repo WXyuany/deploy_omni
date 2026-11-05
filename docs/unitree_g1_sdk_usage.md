@@ -105,7 +105,7 @@ if (snapshot.pointcloud.has_value()) {
 
 ## 交互式高层运控 Demo
 
-完整命令、状态前置条件、离线演练和真机操作步骤见 [G1 高层运控操作手册](unitree_g1/high-level-motion.md)。
+完整命令、状态前置条件、离线演练和真机操作步骤见 [G1 高层运控操作手册](unitree_g1/README.md#高层运控)。
 程序默认只读；使用 `--enable-motion` 才接受控制键。`Start()` 是切换到 FSM 500，`StopMove()` 只停止行走速度，不是通用动作取消或硬件急停。
 
 ## 接口索引
