@@ -2,7 +2,7 @@
 
 [首页](../../README.md) · [通用开发指南](../development.md)
 
-[连接与编译](#连接与编译) · [一行命令验证](#一行命令验证) · [A3 单臂](#a3-单臂) · [D3 双臂](#d3-双臂) · [SDK 与统一接口](#sdk-与统一接口) · [架构与上位机界面](#架构与上位机界面) · [排错](#排错)
+[连接与编译](#连接与编译) · [命令验证](#命令验证) · [A3 单臂](#a3-单臂) · [D3 双臂](#d3-双臂) · [SDK 与统一接口](#sdk-与统一接口) · [架构与上位机界面](#架构与上位机界面)
 
 | 设备 | 配置与状态 |
 |---|---|
@@ -37,12 +37,12 @@ python -m pip install /opt/cvte/arm_control_sdk/carm_python
 
 单臂和双臂共用一次构建，程序输出到 `build-cvte-only/`。Python SDK 通过 WebSocket 通信。
 
-## 一行命令验证
+## 命令验证
 
 先完成上面的 SDK 安装，在上位机项目根目录运行。默认 IP 为 `10.42.0.101`，可追加 `--ip 实际地址`。
 状态检查自动编译 C++ 程序，单／双臂共用 `build-verify-carm/`；运动示例优先使用项目 `.venv` 中的 Python。
 
-| 验证功能 | 一行命令 | 结果怎么看 |
+| 验证功能 | 命令 | 结果怎么看 |
 |---|---|---|
 | A3 连接与状态，只读 | `python3 scripts/verify_robot.py a3 state` | 6 关节，`valid=1 degraded=0 connected=1`，结果 `PASS` |
 | A3 逐个测试 6 关节 | `python3 scripts/verify_robot.py a3 joints` | 每关节偏移 0.15 rad 并返回，目标和返回位置误差均不超过 0.05 rad |
@@ -226,17 +226,5 @@ D3 使用相同部署方式，改用双臂 SDK 类和实际控制器地址。
 
 图中为 D3 界面示例，可查看关节与末端位姿，操作关节、控制模式和轨迹录制。
 
-## 排错
-
-| 情况 | 检查 |
-|---|---|
-| ping 通但 SDK 连不上 | 控制器 IP、8090 端口、防火墙与客户端连接权限 |
-| 状态空或关节数不符 | 型号、每侧 `arm_dof`、状态是否更新 |
-| 返回成功但没有运动 | 是否仿真、模式与伺服、目标和反馈差异 |
-| D3 只有一侧数据 | 分别检查左右连接、状态与供电 |
-| D3 第一条运动报 `command rejected (-1)` | 查看终端 `SDK_REPLY` 和报告 `sdk_requests`；SDK 将拒绝或超时统一成 -1。先前执行过停止时，在原厂上位机确认现场并复位／恢复运行后重试；程序不自动解除停止状态 |
-| D3 预检报 `invalid motion speed scale` | 原厂上位机确认停止状态已恢复、速度值非零；`vel_per=0` 表示速度倍率为零。程序不会自动提高速度 |
-| 动态库加载失败 | SDK 路径、Linux 架构及配套 lib 文件 |
-| Python 找不到 `carm` | 激活 `.venv` 并安装厂商包 |
 
 官方资料：[SDK Demo](https://github.com/cvte-robotics/carm_demo)、[用户文档](https://cvte-bot.feishu.cn/wiki/GyGbwKeWMiqEfDk80QXc9zeCnjf)、[眼在手抓取示例](https://github.com/cvte-robotics/carm_grasp)。抓取另需相机、手眼和工具标定。
