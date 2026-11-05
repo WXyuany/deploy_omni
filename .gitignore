@@ -14,12 +14,9 @@
 /docs/
 !/docs/
 /docs/*
-!/docs/unitree_g1_sdk_usage.md
 !/docs/unitree_g1/
 /docs/unitree_g1/*
 !/docs/unitree_g1/README.md
-!/docs/cvte_carm_integration.md
-!/docs/adapter_architecture.md
 /.sisyphus/
 /.vscode
 /.opencode

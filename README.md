@@ -55,6 +55,6 @@ third_party/        固定版本的共享依赖
 
 - [RobotSdkAdapter](include/bridge/core/robot_sdk_adapter.hpp)
 - [统一数据类型](include/bridge/core/types.hpp)
-- [X2 接入说明](docs/agibot_x2_integration.md)
+- [X2 设备手册](docs/agibot_x2/README.md)
 
 依赖来源与许可见 [第三方说明](THIRD_PARTY.md)。
