@@ -2,7 +2,7 @@
 
 [首页](../../README.md) · [通用开发指南](../development.md)
 
-[连接与编译](#连接与编译) · [命令验证](#命令验证) · [A3 单臂](#a3-单臂) · [D3 双臂](#d3-双臂) · [SDK 与统一接口](#sdk-与统一接口) · [架构与上位机界面](#架构与上位机界面) · [排错](#排错)
+[连接与编译](#连接与编译) · [一行命令验证](#一行命令验证) · [A3 单臂](#a3-单臂) · [D3 双臂](#d3-双臂) · [SDK 与统一接口](#sdk-与统一接口) · [架构与上位机界面](#架构与上位机界面) · [排错](#排错)
 
 | 设备 | 配置与状态 |
 |---|---|
@@ -37,12 +37,12 @@ python -m pip install /opt/cvte/arm_control_sdk/carm_python
 
 单臂和双臂共用一次构建，程序输出到 `build-cvte-only/`。Python SDK 通过 WebSocket 通信。
 
-## 命令验证
+## 一行命令验证
 
 先完成上面的 SDK 安装，在上位机项目根目录运行。默认 IP 为 `10.42.0.101`，可追加 `--ip 实际地址`。
 状态检查自动编译 C++ 程序，单／双臂共用 `build-verify-carm/`；运动示例优先使用项目 `.venv` 中的 Python。
 
-| 验证功能 | 命令 | 结果怎么看 |
+| 验证功能 | 一行命令 | 结果怎么看 |
 |---|---|---|
 | A3 连接与状态，只读 | `python3 scripts/verify_robot.py a3 state` | 6 关节，`valid=1 degraded=0 connected=1`，结果 `PASS` |
 | A3 逐个测试 6 关节 | `python3 scripts/verify_robot.py a3 joints` | 每关节偏移 0.15 rad 并返回，目标和返回位置误差均不超过 0.05 rad |
