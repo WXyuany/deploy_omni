@@ -30,3 +30,6 @@
 *.o
 **/build/
 **/*.egg-info/
+!/docs/development.md
+!/docs/agibot_x2/
+!/docs/agibot_x2/README.md
