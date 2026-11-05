@@ -22,7 +22,7 @@ sudo apt-get install -y build-essential cmake git python3 python3-venv
 | Agibot X2 | [ROS2、关节、传感器、灯光与音频](docs/agibot_x2/README.md) |
 | Unitree G1 | [连接、运控、相机、雷达与 SDK](docs/unitree_g1/README.md) |
 | Kepler K2 | [编译、模拟运行与 API 接入](docs/kepler_k2/README.md) |
-| CVTE CArm A3 / D3 | [单臂、双臂、夹爪与 SDK](docs/cvte_carm_integration.md) |
+| CVTE CArm A3 / D3 | [单臂、双臂、夹爪与 SDK](docs/cvte_carm/README.md) |
 | PM01 | [ROS2 后端与真机准备](PM01_REAL_ROBOT_READINESS.md) |
 
 ## 框架结构

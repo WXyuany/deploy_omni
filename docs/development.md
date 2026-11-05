@@ -1,6 +1,6 @@
 # 开发指南
 
-[首页](../README.md) · [X2](agibot_x2/README.md) · [G1](unitree_g1/README.md) · [CArm](cvte_carm_integration.md)
+[首页](../README.md) · [X2](agibot_x2/README.md) · [G1](unitree_g1/README.md) · [CArm](cvte_carm/README.md)
 
 [构建](#构建) · [统一接口](#统一接口) · [配置与运行](#配置与运行) · [新增设备](#新增设备) · [测试](#测试)
 
